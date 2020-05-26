@@ -4,4 +4,4 @@
 
 A stochastic SEIR meta-population model of measles in northern Vietnam.
 
-Some first explorations [here](https://choisy.github.io/measles/explorations)
+Some first explorations [here](https://choisy.github.io/measles/explorations).
