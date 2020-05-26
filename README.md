@@ -1,5 +1,7 @@
 # Optimizing vaccination in space in northern Vietnam
 
-A stochastic meta-population model of measles in northern Vietnam.
+## Taishi Nakase, Sonia Lewycka, Marc Choisy
 
-Some explorations [here](https://choisy.github.io/measles/explorations)
+A stochastic SEIR meta-population model of measles in northern Vietnam.
+
+Some first explorations [here](https://choisy.github.io/measles/explorations)
