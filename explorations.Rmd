@@ -1,0 +1,449 @@
+---
+title: "Vaccinating on a network"
+csl: the-american-naturalist.csl
+output:
+  html_document:
+    theme: cerulean
+    toc: yes
+  pdf_document:
+    toc: yes
+<!-- bibliography: references.bib -->
+editor_options: 
+  chunk_output_type: console
+---
+
+<!--
+IMAGES:
+Insert them with: ![alt text](image.png)
+You can also resize them if needed: convert image.png -resize 50% image.png
+If you want to center the image, go through HTML code:
+<div style="text-align:center"><img src ="image.png"/></div>
+
+REFERENCES:
+For references: Put all the bibTeX references in the file "references.bib"
+in the current folder and cite the references as @key or [@key] in the text.
+Uncomment the bibliography field in the above header and put a "References"
+title wherever you want to display the reference list.
+-->
+
+<style type="text/css">
+.main-container {
+  max-width: 1370px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r general options, include = FALSE}
+knitr::knit_hooks$set(
+  margin = function(before, options, envir) {
+    if (before) par(mgp = c(1.5, .5, 0), bty = "n", plt = c(.105, .97, .13, .97))
+    else NULL
+  },
+  margin2 = function(before, options, envir) {
+    if (before) par(mgp = c(1.5, .5, 0), bty = "n", plt = c(.105, .895, .13, .97))
+    else NULL
+  },
+  prompt = function(before, options, envir) {
+    options(prompt = if (options$engine %in% c("sh", "bash")) "$ " else "> ")
+  })
+
+knitr::opts_chunk$set(cache = TRUE, autodep = TRUE, message = FALSE, warning = FALSE,
+                      margin = TRUE, dev.args = list(pointsize = 11), fig.height = 3.5,
+                      fig.width = 4.24725, fig.retina = 2, fig.align = "center")
+
+options(width = 137, scipen = 999)
+```
+
+## Packages
+
+```{r}
+required <- c("adaptivetau", "formula.tools", "purrr")
+to_install <- setdiff(required, row.names(installed.packages()))
+# if (length(to_install)) install.packages(to_install)
+```
+
+```{r}
+library(magrittr)
+```
+
+## A stochastic model of measles epidemic
+
+Let's consider a population of `N` individuals, of which `I0` are infectious,
+`p` % are vaccinated and the rest is susceptible. The disease spreads in the
+population with an infectious contact rate of `beta` / person / time unit.
+Infected individuals remain in a latency period of mean duration `1 / sigma`
+time units before they become infectious from which state they recover at the 
+rate of `gamma` / time unit. The following function runs stochastic
+individual-based simulations of this model for a duration of `tf` time units,
+using the algorithm coded in the `f` function.
+
+```{r}
+seir <- function(N = 1e6, I0 = 1, p = 0, beta = 5, sigma = 1 / 7, gamma = 1 / 7,
+                    tf = 100, f = adaptivetau::ssa.adaptivetau, ...) {
+  vaccinated <- round(p * (N - 1))
+  x0 <- c(S = N - I0 - vaccinated, E = 0, I = I0, R = vaccinated)
+  transitions <- list(c(S = -1, E = +1),  # infection
+                      c(E = -1, I = +1),  # getting infectious
+                      c(I = -1, R = +1))  # recovery
+  lvrates <- function(x, params, t) {with(c(x, params),
+    c(beta * S * I / N,  # rate of infection (per time unit)
+      sigma * E,         # rate of getting infectious (per time unit)
+      gamma * I))        # rate of recovery (per time unit)
+  }
+  data.frame(f(x0, transitions, lvrates,
+               list(beta = beta, sigma = sigma, gamma = gamma), tf = tf, ...))
+}
+```
+
+Note that we the default parameters values, we have an $R_0$ of
+
+$$
+R_0 = \frac{\beta}{\sigma + \gamma} = \frac{5}{1/7 + 1/7} = 17.5
+$$
+```{r include = FALSE}
+R_0 <- 17.5
+```
+
+Let's try it with default parameters values:
+
+```{r}
+sim1 <- seir()
+```
+
+which gives:
+
+```{r}
+head(sim1)
+```
+
+of which we can plot the prevalence as a function of time as so:
+
+```{r}
+plot(I ~ time, sim1, type = "l", col = "red", xlab = "day", ylab = "prevalance")
+```
+
+## Running simulation in parallel
+
+The following function runs any expression `expr` `n` times in parallel on
+`mc.cores`:
+
+```{r}
+mcreplicate <- function(n, expr, mc.cores = NULL) {
+  if (is.null(mc.cores)) mc.cores <- parallel::detectCores() - 1
+  parallel::mclapply(integer(n), eval.parent(substitute(function(...) expr)),
+                     mc.cores = mc.cores)
+}
+```
+
+Let's try it:
+
+```{r}
+sim2 <- mcreplicate(10, seir())
+```
+
+The following funtion plots the epi curves from a list simulations:
+
+```{r}
+plot_list <- function(formula, ls, xlim = NULL, ylim = NULL, col = adjustcolor("black", .1), ...) {
+  x <- purrr::map(ls, purrr::pluck, as.character(formula.tools::rhs(formula)))
+  y <- purrr::map(ls, purrr::pluck, as.character(formula.tools::lhs(formula)))
+  if (is.null(xlim)) xlim <- c(0, max(unlist(x)))
+  if (is.null(ylim)) ylim <- c(0, max(unlist(y)))
+  plot(NA, xlim = xlim, ylim = ylim, ...)
+  purrr::walk2(x, y, lines, col = col)
+}
+```
+
+Let's try it:
+
+```{r}
+plot_list(I ~ time, sim2, type = "l", xlab = "day", ylab = "prevalance")
+```
+
+## Exploring epidemics
+
+Let's consider 1,000 simulations of the previous model for various vaccine
+coverages. For that, let's first consider the following `simulate()` function:
+
+```{r}
+simulate <- function(x) purrr::rerun(1000, seir(p = x, tf = 1000))
+```
+
+Let's use this function in parallel for 11 values of vaccine coverage (1'):
+
+```{r sim3, eval = FALSE}
+sim3 <- parallel::mclapply(seq(0, 1, .1), simulate, mc.cores = parallel::detectCores() - 1)
+```
+
+```{r include = FALSE}
+sim3 <- readRDS("sim3.rds")
+```
+
+Let's plot the $11 \times 1000 = 11000$ epi curves:
+
+```{r}
+plot_list(I ~ time, unlist(sim3, FALSE), type = "l", xlab = "day", ylab = "prevalance", xlim = c(0, 200))
+```
+
+Verifying that 1000 days is long enough:
+
+```{r}
+unique(unlist(lapply(unlist(sim3, FALSE), function(x) tail(x, 1)[, c("E", "I")])))
+```
+
+## Probability of an epidemic and epidemic size
+
+The following function computes the epidemic size in a population of 1,000,000
+individuals, for a number of vaccine coverage values (in vector `p`), with `n`
+replications for each vaccine coverage value:
+
+```{r}
+epi_size <- function(p = .5, N = 1e6, n = 1000, t = .1, nbcores = NULL, ...) {
+  library(dplyr)
+  if (is.null(nbcores)) nbcores <- parallel::detectCores() - 1
+  simulate <- function(x) seir(p = x, N = N, ...)
+  p %>%
+    parallel::mclapply(function(x) purrr::rerun(n, dplyr::last(simulate(x)$R)),
+                       mc.cores = nbcores) %>% 
+    purrr::map(function(x) data.frame(unlist(x))) %>% 
+    purrr::map2(p, function(x, y) dplyr::mutate(x, p = y)) %>% 
+    dplyr::bind_rows() %>% 
+    dplyr::transmute(p = p,
+                     epi_size = as.integer(unlist.x. - round(p * (N - 1))))
+}
+```
+
+Let's try it (40''):
+
+```{r sim4, eval = FALSE}
+sim4 <- epi_size(seq(0, 1, .1), tf = 1000)
+```
+
+```{r include = FALSE}
+sim4 <- readRDS("sim4.rds")
+```
+
+Let's see that:
+
+```{r}
+plot(epi_size ~ p, sim4, xlab = "vaccine coverage", ylab = "epidemic size")
+```
+
+Let's see in more detail what happens between the vaccine coverages 80% and
+100% (1'):
+
+```{r sim5, eval = FALSE}
+sim5 <- epi_size(seq(.8, 1, .01), tf = 1000)
+```
+
+```{r include = FALSE}
+sim5 <- readRDS("sim5.RDS")
+```
+
+Let's see that:
+
+```{r}
+plot(epi_size ~ p, sim5, xlab = "vaccine coverage", ylab = "epidemic size")
+```
+
+Let's combine with previous simulation:
+
+```{r}
+plot(epi_size ~ p, dplyr::bind_rows(sim4, sim5),
+     xlab = "vaccine coverage", ylab = "epidemic size")
+```
+
+and:
+
+```{r}
+plot(log10(epi_size) ~ p, dplyr::bind_rows(sim4, sim5),
+     xlab = "vaccine coverage", ylab = "epidemic size")
+abline(h = log10(10))
+```
+
+The horizontal line shows total number of secondary cases equal to 10. In what
+follows we will consider this (arbitrary) threshold value to define an epidemic.
+The following function uses this threshold to compute the probability that an
+epidemic occurs and the expected epidemic size in case there is an epidemic:
+
+```{r}
+epi_proba_mean_size <- function(p = .5, N = 1e6, n = 1000, t = .1, threshold = 10,
+                                nbcores = NULL, ...) {
+  library(dplyr)
+  if (is.null(nbcores)) nbcores <- parallel::detectCores() - 1
+  simulate <- function(x) seir(p = x, N = N, ...)
+  
+  f <- function(x) {
+    R_size <- unlist(purrr::rerun(n, dplyr::last(simulate(x)$R)))
+    epi_size <- R_size - round(x * (N - 1))
+    sel <- epi_size > threshold
+    c(epi_proba     = mean(sel),
+      mean_epi_size = mean(epi_size[sel]))
+  }
+  
+  p %>%
+    parallel::mclapply(f, mc.cores = nbcores) %>% 
+    purrr::map(~ t(.) %>% as.data.frame()) %>%
+    purrr::map2(p, ~ dplyr::mutate(.x, p = .y)) %>% 
+    dplyr::bind_rows() %>% 
+    dplyr::select(p, dplyr::everything())
+}
+```
+
+Let's try it (77'):
+
+```{r sim6, eval = FALSE}
+sim6 <- epi_proba_mean_size(seq(0, 1, .001), tf = 1000)
+```
+
+```{r include = FALSE}
+sim6 <- readRDS("sim6.rds")
+```
+
+Let's see the effect of vaccine coverage on the probability of an epidemic:
+
+```{r margin = FALSE, margin2 = TRUE}
+col1 <- "red"
+col2 <- "blue"
+plot(mean_epi_size ~ p, sim6, xlab = "vaccine coverage", ylab = NA, col = col1, axes = FALSE)
+axis(1)
+axis(2, col = col1, col.axis = col1)
+title(ylab = "expected epidemic size", col.lab = col1)
+par(new = TRUE)
+plot(epi_proba ~ p, sim6, ann = FALSE, col = col2, axes = FALSE)
+axis(4, col = col2, col.axis = col2)
+mtext("probability of an epidemic", 4, 1.5, col = col2)
+```
+
+The effects of a decrease in vaccine coverage are particularly important for
+high vaccine coverages:
+
+```{r margin = FALSE, margin2 = TRUE}
+sim6b <- dplyr::filter(sim6, p >= .7)
+
+pc <- 1 - 1 / R_0
+tmp <- tail(dplyr::filter(sim6, p < round(pc, 3) + .001), 1)
+
+col1 <- "red"
+col2 <- "blue"
+plot(mean_epi_size ~ p, sim6b, xlab = "vaccine coverage", ylab = NA, col = col1, axes = FALSE)
+axis(1)
+axis(2, col = col1, col.axis = col1)
+title(ylab = "expected epidemic size", col.lab = col1)
+segments(0, tmp$mean_epi_size, pc, tmp$mean_epi_size, col = col1)
+par(new = TRUE)
+plot(epi_proba ~ p, sim6b, ann = FALSE, col = col2, axes = FALSE, ylim = 0:1)
+axis(4, col = col2, col.axis = col2)
+mtext("probability of an epidemic", 4, 1.5, col = col2)
+segments(pc, tmp$epi_proba, 1.1, tmp$epi_proba, col = col2)
+abline(v = pc)
+```
+
+Note that, at the theoretically safe vaccine coverage $p_c = 1 - 1/R_0 = 94.3 \%$,
+there is still a probability of `r tmp$epi_proba` to have an epidemic of
+`r round(tmp$mean_epi_size)` individuals.
+
+Let's simulate for other populations sizes:
+
+```{r sim7sim8sim9, eval = FALSE}
+sim7 <- epi_proba_mean_size(seq(0, 1, .001), N = 1e5, tf = 1000)
+sim8 <- epi_proba_mean_size(seq(0, 1, .001), N = 1e4, tf = 1000)
+sim9 <- epi_proba_mean_size(seq(0, 1, .001), N = 1e3, tf = 1000)
+```
+
+```{r include = FALSE}
+sim7 <- readRDS("sim7.rds")
+sim8 <- readRDS("sim8.rds")
+sim9 <- readRDS("sim9.rds")
+```
+
+Let's put the 4 simulations together:
+
+```{r}
+four_sims <- dplyr::bind_rows(list(sim9, sim8, sim7, sim6), .id = "sim")
+four_sims <- four_sims[sample(nrow(four_sims)), ] %>% 
+  dplyr::mutate(
+    sim = as.integer(sim),
+    epi_size = mean_epi_size / (10^(sim + 2)))
+```
+
+Let's compare the probabilities of an epidemic for the 4 population sizes:
+
+```{r}
+plot(epi_proba ~ p, four_sims, xlab = "vaccine coverage",
+     ylab = "probability of an epidemic", col = four_sims$sim)
+op <- par(family = "mono")
+legend("center", legend = c("    1,000 ind.", "   10,000 ind.", "  100,000 ind.", "1,000,000 ind."),
+       col = 1:4, pch = 1, bty = "n", title = "population size:")
+par(op)
+```
+
+Let's now compare the expected epidemic size for the 4 population sizes:
+
+```{r}
+plot(epi_size ~ p, four_sims, xlab = "vaccine coverage",
+     ylab = "expected proportion of population infected", col = four_sims$sim)
+op <- par(family = "mono")
+legend("topright", legend = c("    1,000 ind.", "   10,000 ind.", "  100,000 ind.", "1,000,000 ind."),
+       col = 1:4, pch = 1, bty = "n", title = "population size:")
+par(op)
+```
+
+Let's zoom in:
+
+```{r}
+four_sims2 <- dplyr::filter(four_sims, p >= .93)
+plot(epi_size ~ p, four_sims2, xlab = "vaccine coverage",
+     ylab = "expected proportion of population infected", col = four_sims2$sim)
+op <- par(family = "mono")
+legend("topright", legend = c("    1,000 ind.", "   10,000 ind.", "  100,000 ind.", "1,000,000 ind."),
+       col = 1:4, pch = 1, bty = "n", title = "population size:")
+par(op)
+```
+
+The differences for the high vaccine coverage is an artefact of the chosen
+threshold on the number of 10 infected individuals chosen to define an epidemic.
+In consequence, we'll use this data frame for our analyses:
+
+```{r}
+ref <- sim6 %>% 
+  dplyr::transmute(vacc_cov = p,
+                   epi_proba = epi_proba,
+                   epi_prop = mean_epi_size / 1e6)
+```
+
+which looks like this:
+
+```{r margin = FALSE, margin2 = TRUE}
+ref2 <- dplyr::filter(ref, vacc_cov >= .7)
+tmp2 <- tail(dplyr::filter(ref2, vacc_cov < round(pc, 3) + .001), 1)
+plot((100 * epi_prop) ~ vacc_cov, ref2, xlab = "vaccine coverage",
+     ylab = NA, col = col1, axes = FALSE)
+axis(1)
+axis(2, col = col1, col.axis = col1)
+title(ylab = "percentage of total population affected", col.lab = col1)
+segments(0, 100 * tmp2$epi_prop, pc, 100 * tmp2$epi_prop, col = col1)
+par(new = TRUE)
+plot(epi_proba ~ vacc_cov, ref2, ann = FALSE, col = col2, axes = FALSE, ylim = 0:1)
+axis(4, col = col2, col.axis = col2)
+mtext("probability of an epidemic", 4, 1.5, col = col2)
+segments(pc, tmp2$epi_proba, 1.1, tmp2$epi_proba, col = col2)
+abline(v = pc)
+```
+
+Again, at the recommanded $p_c$ vaccine coverage calculated from $R_0$, there is
+still more than a 50% chance to see an epidemic affecting more than 4% of the
+total population upon the introduction of one infected individual.
+
+The probability of an epidemic will depend on the number of infected individuals
+introduced in the population:
+
+```{r}
+
+```
+
+
+## Building a population network
+
+## Optimizing vaccination policy
