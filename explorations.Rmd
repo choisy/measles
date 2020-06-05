@@ -656,23 +656,31 @@ for $j, k = 1,\ldots,n$ and $j \neq k$.
 \newline
 
 The following function implements the above model. \newline
-Consider `n` populations/cities. City j has `N[j]` individuals, of which `I[j]` are infections, `p[j]` % are vaccinated and the rest are susceptible. For all populations, the disease spreads in the population with an infectious contact rate of `beta` / person / time unit. Infected individuals remain in a latency period of mean duration `1 / sigma` time units before they become infectious from which state they recover at the rate of `gamma` / time unit. `f` is the demographic coupling matrix among the `n` cities where $f_{jj} = 1 - \sum_{k \neq j} f_{kj}$. The following function runs stochastic individual-based simulations of this model for a duration of `tf` time units, using the algorithm coded in the `f` function. The algorithm implements adaptive tau leaping to approximate the trajectory of a continuous-time stochastic process (the Gillespie stochastic simulation algorithm).
+Consider `num` populations/cities. City j has `N[j]` individuals, of which `I[j]` are infections, `p[j]` % are vaccinated and the rest are susceptible. For all populations, the disease spreads in the population with an infectious contact rate of `beta` / person / time unit. Infected individuals remain in a latency period of mean duration `1 / sigma` time units before they become infectious from which state they recover at the rate of `gamma` / time unit. `f` is the demographic coupling matrix among the `n` cities where $f_{jj} = 1 - \sum_{k \neq j} f_{kj}$. The following function runs stochastic individual-based simulations of this model for a duration of `tf` time units, using the algorithm coded in the `f` function. The algorithm implements adaptive tau leaping to approximate the trajectory of a continuous-time stochastic process (the Gillespie stochastic simulation algorithm).
 
 ```{r}
-seirNCity <- function(n = 2, N = c(8e6, 1.5e6), I0 = c(1, 1), p = c(0,0), 
+seirNCity <- function(num = 2, N = c(8e6, 1.5e6), I0 = c(1,1), p = c(0, 0),
                       beta = 5, sigma = 1/7, gamma = 1/7, 
                       fM = matrix(c(0.99, 0.05, 0.01, 0.95), nrow = 2, ncol = 2, byrow = TRUE),
-                      tf = 100, fGillespie = adaptivetau::ssa.adaptivetau, ...) {
+                      tf = 100, f = adaptivetau::ssa.adaptivetau, ...) {
+  
   # vector of initial values
   vaccinated <- unlist(purrr::map2(p, N, function(x, y) round(x * (y - 1))))
   x0 <- unlist(purrr::pmap(list(I0, vaccinated, N), function(x, y, z) c(z - x - y, 0, x, y)))
+  names(x0) <- unlist(purrr::map(seq(1, num), function(x) c(paste0("S", x), paste0("E", x),
+                                                   paste0("I", x), paste0("R", x))))
   
-  # transitions
-  minusStates <- unlist(purrr::map(seq(0, n-1), function(x) c(1 + 4*x, 2 + 4*x, 3 + 4*x)))
-  plusStates <- unlist(purrr::map(seq(0, n-1), function(x) c(2 + 4*x, 3 + 4*x, 4 + 4*x)))
-  tMatrix <- matrix(unlist(purrr::map2(minusStates, plusStates, function(x, y) c(x, -1, y, +1))), 
-                 nrow = 4, ncol = n*3)
-  transitions <- adaptivetau::ssa.maketrans(n*4, tMatrix)
+  # Transitions
+  varNames1 <- unlist(purrr::map(seq(1, num), function(x) c(paste0("S", x), paste0("E", x),
+                                                   paste0("I", x))))
+  varNames2 <- unlist(purrr::map(seq(1, num), function(x) c(paste0("E", x), paste0("I", x),
+                                                   paste0("R", x))))
+  fTransitions <- function(x, y) {
+    tmp <- c(-1, +1)
+    names(tmp) <- c(x, y)
+    tmp
+  }
+  transitions <- purrr::map2(varNames1, varNames2, fTransitions)
   
   # City commmuter coefficients. 
   f2 <- function(j, k) {
@@ -691,25 +699,101 @@ seirNCity <- function(n = 2, N = c(8e6, 1.5e6), I0 = c(1, 1), p = c(0,0),
 
       }
   }
-  I <- iterpc(n, 2, ordered = TRUE, replace = TRUE)
+  I <- iterpc(num, 2, ordered = TRUE, replace = TRUE)
   coeffs <- unlist(purrr::map2(t(getall(I))[1,], t(getall(I))[2,], f2))
-  cMatrix <- matrix(coeffs, nrow = n, ncol = n, byrow = TRUE)
+  cMatrix <- matrix(coeffs, nrow = num, ncol = num, byrow = TRUE)
   
-  # Rate function.
-  lvrates <- function(x, params, t) {
-    f1 <- function(j) {
-      infectionRate <- sum(unlist(purrr::map(seq(1:n), function(k) cMatrix[j, k] * x[4*j-3] * x[4*k - 1] / N[k])))
-      with(c(params), c(beta * infectionRate, sigma * x[4*j-2], gamma * x[4*j-1]))
+  # rate function.
+  lvrates <- function(x, params, t){
+    cityRates <- function(j) {
+    infectionRate <- 
+      sum(unlist(purrr::map(seq(1, num), 
+                            function(k) cMatrix[j, k] * x[paste0("S", j)] * x[paste0("I", k)] / N[k])))
+    with(c(x, params), c(beta * infectionRate, sigma * x[paste0("E", j)], gamma * x[paste0("I", j)]))
     }
-    unlist(purrr::map(seq(1:n), f1)) 
+    unlist(purrr::map(seq(1, num), cityRates))
   }
-  data.frame(fGillespie(x0, transitions, lvrates, 
-               list(beta = beta, sigma = sigma, gamma = gamma), tf = tf))
+  
+  # simulation
+  data.frame(f(x0, transitions, lvrates, 
+               list(beta = beta, sigma = sigma, gamma = gamma), tf = tf, ...))
 }
 ```
 
+Let's try the model over two cities. 
 ```{r}
-epi_proba_mean_size5(p = list(0.95, seq(0.9, 1, 0.1), seq(0.9, 1, 0.1)))
+sim2City <- seirNCity(num = 2, N = c(1e6, 1e6), 
+                      p = c(0.95, 0.5), I0 = c(1, 1),
+                      fM = matrix(c(0.098, 0.002, 0.1, 0.9),
+                                 nrow = 2, ncol = 2, byrow = TRUE))
+```
+
+which gives, 
+
+```{r}
+head(sim2City)
+```
+
+```{r}
+library(dplyr)
+sim2City %>% dplyr::select(time, I1, I2) %>%
+  gather(key = city, value = number, I1, I2) %>%
+  ggplot(aes(x = time, y = number, color = city, group = city)) + geom_line() + 
+  labs(x = "Time (days)", y = "Prevalence")
+```
+
+Now, let's try the model over three cities. 
+
+``` {r}
+sim3City <- seirNCity(num = 3, N = c(1e6, 1e6, 1e6), 
+                      p = c(0.95, 0.5, 0.95), I0 = c(1, 1, 1),
+                      fM = matrix(c(0.098, 0.001, 0.001, 0.1, 0.9, 0, 0.1, 0, 0.9), 
+                                 nrow = 3, ncol = 3, byrow = TRUE))
+```
+
+which gives 
+
+```{r}
+head(sim3City)
+```
+
+```{r}
+library(dplyr)
+sim3City %>% dplyr::select(time, I1, I2, I3) %>%
+  gather(key = city, value = number, I1, I2, I3) %>%
+  ggplot(aes(x = time, y = number, color = city, group = city)) + geom_line() + 
+  labs(x = "Time (days)", y = "Prevalence")
+```
+
+The demographic coupling parameters for the above three city model were selected such that there was strong coupling between city 1 and city 2 and relatively no coupling between city 2 and city 3. Furthermore, the vaccination coverage in city 2 is lower relative to cities 1 and 3. As such, one would expect that there would be a large epidemic in city 2, as well as a small epidemic in city 1 and relatively no infections in city 3. This is precisely what one observes in the above graph. 
+
+#### Explorations of the N-city model
+Consider a large central city of 8 million people and two smaller satellite cities each with 1 million residents. Furthermore, suppose that the large city has a relatively high vaccine coverage in comparison to the two smaller cities. We will explore how the epidemic dynamics in the central change vary with different vaccine coverage levels in the satellite cities. 
+
+```{r}
+epi_proba_mean_size5 <- function(num = 3, N = c(8e6, 1e6, 1e6), I0 = c(0, 1, 1), 
+                                 p = list(0.95, 0.5, 0.5), 
+                                 fM = matrix(c(0.098, 0.001, 0.001, 0.1, 0.9, 0, 0.1, 0, 0.9),
+                                         nrow = 3, ncol = 3, byrow = TRUE),
+                                 n = 1000, t = 0.1, threshold = 10, 
+                                 nbcores = NULL, ...) {
+  library(dplyr)
+  simulate <- function(x, y) seirNCity(num = num, N = N, I0 = I0, p = c(p[[1]], x, y),
+                                    fM = fM, ...)
+  
+  f <- function(x, y) {
+    R_size <- unlist(purrr::rerun(n, dplyr::last(simulate(x, y)$R1)))
+    epi_size <- R_size - round(p[[1]] * (N[1] - 1))
+    sel <- epi_size > threshold
+    c(epi_proba = mean(sel),
+      mean_epi_size = mean(epi_size[sel]))
+  }
+  purrr::map2(p[[2]], p[[3]], f) %>%
+  purrr::map(~ t(.) %>% as.data.frame()) %>%
+  dplyr::bind_rows() %>%
+  dplyr::mutate(p2 = p[[2]], p3 = p[[3]]) %>%
+  dplyr::select(p2, p3, dplyr::everything())
+}
 ```
 
 ```{r}
@@ -720,24 +804,4 @@ sim14 <- epi_proba_mean_size5(n = 3, N = c(8e6, 1e6, 1e6), I0 = c(1, 1, 1),
                                     tf = 1000)
 ```
 
-```{r}
-sim2City <- seirNCity(cities = 2, N = c(1e6, 1e6), 
-                      p = c(0.95, 0.5), I0 = c(1, 1),
-                      fM = matrix(c(0.098, 0.002, 0.1, 0.9),
-                                 nrow = 2, ncol = 2, byrow = TRUE))
-```
 
-``` {r}
-sim3City <- seirNCity(n = 3, N = c(1e6, 1e6, 1e6), 
-                      p = c(0.95, 0.5, 0.95), I0 = c(1, 1, 1),
-                      fM = matrix(c(0.098, 0.001, 0.001, 0.1, 0.9, 0, 0.1, 0, 0.9), 
-                                 nrow = 3, ncol = 3, byrow = TRUE))
-```
-
-```{r}
-library(dplyr)
-sim3City %>% dplyr::select(time, x3, x7, x11) %>%
-  gather(key = city, value = number, x3, x7, x11) %>%
-  ggplot(aes(x = time, y = number, color = city, group = city)) + geom_line() + 
-  labs(x = "Time (days)", y = "Prevalence")
-```
