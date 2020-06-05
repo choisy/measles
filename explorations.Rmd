@@ -539,11 +539,11 @@ epi_proba_mean_size3 <- function(N1 = 8e6, N2 = 1e6, I10 = 1, I20 = 1, p1 = 0.95
 
 Let's simulate this hypothetical two-city network. 
 ```{r}
-sim12 <- epi_proba_mean_size3(f12 = seq(0, 0.20, 0.01), f21 = 0.001, tf = 1000)
+sim12 <- epi_proba_mean_size3(f12 = seq(0, 0.20, 0.01), f21 = 0.00001, tf = 1000)
 ```
 
 Let's see how the probability of an epidemic and the mean epidemic size given an epidemic occurs change with increasing coupling between the two cities. 
-```{r}
+```{r margin1 = FALSE, margin2 = TRUE}
 col1 <- "red"
 col2 <- "blue"
 plot(mean_epi_size ~ f12, sim12, xlab = "demographic coupling", ylab = NA, 
@@ -591,7 +591,7 @@ Let's simulate this hypothetical two-city network.
 sim13 <- epi_proba_mean_size4(p2 = seq(0, 1, 0.01) , tf = 1000)
 ```
 
-```{r}
+```{r margin1 = FALSE, margin2 = TRUE}
 col1 <- "red"
 col2 <- "blue"
 plot(mean_epi_size ~ p2, sim13, xlab = "vaccination coverage in smaller city", ylab = NA, 
@@ -797,11 +797,23 @@ epi_proba_mean_size5 <- function(num = 3, N = c(8e6, 1e6, 1e6), I0 = c(0, 1, 1),
 ```
 
 ```{r}
-sim14 <- epi_proba_mean_size5(n = 3, N = c(8e6, 1e6, 1e6), I0 = c(1, 1, 1),
+sim14 <- epi_proba_mean_size5(num = 3, N = c(8e6, 1e6, 1e6), I0 = c(1, 1, 1),
                               p = list(0.95, seq(0, 1, 0.01), seq(0, 1, 0.01)),
                               f = matrix(c(0.098, 0.001, 0.001, 0.1, 0.9, 0, 0.1, 0, 0.9),
                                          nrow = 3, ncol = 3, byrow = TRUE),
                                     tf = 1000)
 ```
 
-
+```{r margin1 = FALSE, margin2 = TRUE}
+col1 <- "red"
+col2 <- "blue"
+plot(mean_epi_size ~ p2, sim14, xlab = "vaccination coverage in satellite cities", ylab = NA, 
+     col = col1, axes = FALSE)
+axis(1)
+axis(2, col = col1, col.axis = col1)
+title(ylab = "expected epidemic size", col.lab = col1)
+par(new = TRUE)
+plot(epi_proba ~ p2, sim14, ann = FALSE, col = col2, axes = FALSE)
+axis(4, col = col2, col.axis = col2)
+mtext("probability of an epidemic", 4, 1.5, col = col2)
+```
