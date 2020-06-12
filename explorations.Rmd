@@ -70,6 +70,7 @@ library(magrittr)
 library(ggplot2)
 library(tidyverse)
 library(iterpc)
+library(deSolve)
 ```
 
 ## Single population stochastic model of measles epidemic
@@ -84,7 +85,7 @@ Note that the model makes the assumption that the infection, getting infectious 
 ```{r}
 seir <- function(N = 1e6, I0 = 1, p = 0, beta = 5, sigma = 1/7, gamma = 1/7, 
                  tf = 100, f = adaptivetau::ssa.adaptivetau, ...) {
-  vaccinated <- round(p * (N - 1))
+  vaccinated <- round(p * (N - I0))
   x0 <- c(S = N - I0 - vaccinated, E = 0, I = I0, R = vaccinated)
   transitions <- list(c(S = -1, E = +1),  # infection
                       c(E = -1, I = +1),  # getting infectious
@@ -293,7 +294,7 @@ axis(4, col = col2, col.axis = col2)
 mtext("probability of an epidemic", 4, 1.5, col = col2)
 ```
 
-There is a strong linear relationship between vaccine coverage and the expected epidemic size. Furthermore, the effects of a decrease in vaccine coverage are particularly important for high vaccine coverages:
+There is a strong linear relationship between vaccine coverage and the expected epidemic size. Furthermore, the effects of a decrease in vaccine coverage are particularly important for high vaccine coverages. Let's zoom up on the higher vaccine coverage region. 
 
 ```{r margin = FALSE, margin2 = TRUE}
 sim6b <- dplyr::filter(sim6, p >= 0.7)
@@ -321,14 +322,14 @@ Note that, at the theoretically safe vaccine coverage $p_c = 1 - 1/R_0 = 94.3 \%
 
 Let's simulate for other population sizes:
 
-```{r sim7sim8sim9}
+```{r sim7sim8sim9, eval = FALSE}
 sim7 <- epi_proba_mean_size(seq(0, 1, 0.001), N = 1e5, tf = 1000)
 sim8 <- epi_proba_mean_size(seq(0, 1, 0.001), N = 1e4, tf = 1000)
 sim9 <- epi_proba_mean_size(seq(0, 1, 0.001), N = 1e3, tf = 1000)
 ```
 
 Let's put the 4 simulations together. 
-```{r}
+```{r, eval = FALSE}
 four_sims <- dplyr::bind_rows(list(sim9, sim8, sim7, sim6), .id = "sim")
 four_sims <- four_sims[sample(nrow(four_sims)), ] %>%
   dplyr::mutate(sim = as.integer(sim), 
@@ -336,7 +337,7 @@ four_sims <- four_sims[sample(nrow(four_sims)), ] %>%
 ```
 
 Let's compare the probabilities of an epidemic for the 4 population sizes. 
-```{r}
+```{r, eval = FALSE}
 plot(epi_proba ~ p, four_sims, xlab = "vaccine coverage",
      ylab = "probability of an epidemic", col = four_sims$sim)
 op <- par(family = "mono")
@@ -349,7 +350,7 @@ The probabilities of an epidemic for the 4 population sizes do not greatly diffe
 
 Let's now compare the expected epidemic size for the 4 population sizes:
 
-```{r}
+```{r eval = FALSE}
 plot(epi_size ~ p, four_sims, xlab = "vaccine coverage",
      ylab = "expected proportion of population infected", col = 
        four_sims$sim)
@@ -360,7 +361,7 @@ par(op)
 ```
 
 Let's zoom in:
-```{r}
+```{r eval = FALSE}
 four_sims2 <- dplyr::filter(four_sims, p >= .93)
 plot(epi_size ~ p, four_sims2, xlab = "vaccine coverage",
      ylab = "expected proportion of population infected", col = four_sims2$sim)
@@ -402,45 +403,42 @@ abline(v = pc)
 Again, at the recommended $V_c$ vaccine coverage calculated from $R_0$, there is stil more than a 50% chance to see an epidemic affecting more than 4% of the total population upon the introduction of one infected individual. 
 
 The probability of an epidemic will depend on the number of infected individuals introduced in the population: \newline
-We will assume a vaccine coverage of $V_c \approx 0.9429$ and populations with different initial infective levels. Futhermore, an epidemic is defined as the total number of secondary cases being in excess of 10. 
+The following computes the probability of an epidemics over different vaccine coverages and different initial infective levels. Furthermore, in keeping with an already established assumption, an epidemic is defined as the total number of secondary being in excess of 10. 
 
 ```{r}
-epi_proba_mean_size2 <- function(p = 1 - 1/17.5, I0 = 1, N = 1e6, n = 1000, t = 0.1, 
-                                 threshold = 10, nbcores = NULL, ...) {
-  library(dplyr)
-  if (is.null(nbcores)) nbcores <- parallel::detectCores() - 1
-  simulate <- function(x) seir(p = p, I0 = x, N = N, ...)
+epi_proba2 <- function(p = 1 - 1/17.5, I0 = 1, N = 1e6, n = 1000, t = 0.1, 
+                       threshold = 10, ...) {
+  simulate <- function(x, y) seir(p = x, I0 = y, N = N, ...)
   
-  f <- function(x) {
-    R_size <- unlist(purrr::rerun(n, dplyr::last(simulate(x)$R)))
-    epi_size <- R_size - round(p * (N - 1))
+  f <- function(x, y) {
+    R_size <- unlist(purrr::rerun(n, dplyr::last(simulate(x, y)$R)))
+    epi_size <- R_size - round(x * (N - y))
     sel <- epi_size > threshold
-    c(epi_proba = mean(sel),
-      mean_epi_size = mean(epi_size[sel]))
+    c(mean(sel))
   }
-  I0 %>% 
-    parallel::mclapply(f, mc.cores = nbcores) %>%
-    purrr::map(~ t(.) %>% as.data.frame()) %>%
-    purrr::map2(I0, ~ dplyr::mutate(.x, I0 = .y)) %>%
-    dplyr::bind_rows() %>%
-    dplyr::select(I0, dplyr::everything())
+  
+  df <- data.frame("p" = p, 
+                   do.call(cbind, 
+                           purrr::map(I0, function(y) unlist(purrr::map(p, function(x) f(x, y))))))
+  colnames(df) <- c("p", unlist(purrr::map(seq(1, length(I0)), function(x) c(paste0("I", x)))))
+  df
 }
 ```
 
-Let's simulate the epidemic for 11 populations with different initial infective levels. 
-
-```{r}
-sim11 <- epi_proba_mean_size2(I0 = seq(1, 10, by = 1), tf = 1000)
+```{r eval = FALSE}
+epi_probs <- epi_proba2(p = seq(0, 1, 0.001), I0 = seq(1, 10, 1), tf = 1000, n = 1000)
 ```
 
-Let's see the effect of initial number of infective on the probability of an epidemic:
-
-```{r margin = FALSE, margin2 = TRUE}
-plot(epi_proba ~ I0, sim11, xlab = "Initial number of infectives", 
-     ylab = "probability of an epidemic")
+```{r eval = FALSE}
+est_epi_probs <- data.frame(sim6$p, do.call(cbind, purrr::map(seq(1, 10, 1), function(x) (1 - (1 - sim6$epi_proba)^x))))
+diff <- data.frame("p" = sim6$p, do.call(cbind, purrr::map(seq(1, 10), function(x) as.matrix(epi_probs)[,x] - est_epi_probs[, x])))
 ```
 
-At the recommended vaccine coverage of $V_c \approx 0.9429$, we see that the probability of an epidemic is above 90% if the initial number of infectives is 3 or greater. As such, with a high $R_0$, only a small number of initial infectives are required to seed an epidemic. 
+```{r eval = FALSE}
+diff %>% gather(key = infectives, value = probability, X1:X10)  %>%
+  ggplot(aes(x = p, y = probability, color = infectives, group = infectives)) + geom_line() + 
+  labs(x = "vaccine coverage", y = "probability of an epidemic")
+```
 
 ## Building a population network
 
@@ -538,12 +536,12 @@ epi_proba_mean_size3 <- function(N1 = 8e6, N2 = 1e6, I10 = 1, I20 = 1, p1 = 0.95
 ```
 
 Let's simulate this hypothetical two-city network. 
-```{r}
+```{r eval = FALSE}
 sim12 <- epi_proba_mean_size3(f12 = seq(0, 0.20, 0.01), f21 = 0.00001, tf = 1000)
 ```
 
 Let's see how the probability of an epidemic and the mean epidemic size given an epidemic occurs change with increasing coupling between the two cities. 
-```{r margin1 = FALSE, margin2 = TRUE}
+```{r margin1 = FALSE, margin2 = TRUE, eval = FALSE}
 col1 <- "red"
 col2 <- "blue"
 plot(mean_epi_size ~ f12, sim12, xlab = "demographic coupling", ylab = NA, 
@@ -587,11 +585,11 @@ epi_proba_mean_size4 <- function(N1 = 8e6, N2 = 1e6, I10 = 1, I20 = 1, p1 = 0.95
 ```
 
 Let's simulate this hypothetical two-city network. 
-```{r}
+```{r eval = FALSE}
 sim13 <- epi_proba_mean_size4(p2 = seq(0, 1, 0.01) , tf = 1000)
 ```
 
-```{r margin1 = FALSE, margin2 = TRUE}
+```{r margin1 = FALSE, margin2 = TRUE, eval = FALSE}
 col1 <- "red"
 col2 <- "blue"
 plot(mean_epi_size ~ p2, sim13, xlab = "vaccination coverage in smaller city", ylab = NA, 
@@ -746,9 +744,9 @@ Now, let's try the model over three cities.
 
 ``` {r}
 sim3City <- seirNCity(num = 3, N = c(1e6, 1e6, 1e6), 
-                      p = c(0.95, 0.5, 0.95), I0 = c(1, 1, 1),
+                      p = c(0.95, 0.5, 0.95), I0 = c(1, 0, 0),
                       fM = matrix(c(0.098, 0.001, 0.001, 0.1, 0.9, 0, 0.1, 0, 0.9), 
-                                 nrow = 3, ncol = 3, byrow = TRUE))
+                                 nrow = 3, ncol = 3, byrow = TRUE), tf = 150)
 ```
 
 which gives 
@@ -796,7 +794,7 @@ epi_proba_mean_size5 <- function(num = 3, N = c(8e6, 1e6, 1e6), I0 = c(0, 1, 1),
 }
 ```
 
-```{r}
+```{r eval = FALSE}
 sim14 <- epi_proba_mean_size5(num = 3, N = c(8e6, 1e6, 1e6), I0 = c(1, 1, 1),
                               p = list(0.95, seq(0, 1, 0.01), seq(0, 1, 0.01)),
                               f = matrix(c(0.098, 0.001, 0.001, 0.1, 0.9, 0, 0.1, 0, 0.9),
@@ -804,7 +802,7 @@ sim14 <- epi_proba_mean_size5(num = 3, N = c(8e6, 1e6, 1e6), I0 = c(1, 1, 1),
                                     tf = 1000)
 ```
 
-```{r margin1 = FALSE, margin2 = TRUE}
+```{r margin1 = FALSE, margin2 = TRUE, eval = FALSE}
 col1 <- "red"
 col2 <- "blue"
 plot(mean_epi_size ~ p2, sim14, xlab = "vaccination coverage in satellite cities", ylab = NA, 
@@ -816,4 +814,262 @@ par(new = TRUE)
 plot(epi_proba ~ p2, sim14, ann = FALSE, col = col2, axes = FALSE)
 axis(4, col = col2, col.axis = col2)
 mtext("probability of an epidemic", 4, 1.5, col = col2)
+```
+
+## Approximation of the Population Network
+
+### Deterministic SEIR model
+Consider a population of `N` individuals with `Y0` initial infectives and `v`% vaccine coverage. The epidynamics of the population will be simulated by a deterministic SEIR model without demographic over a time frame `tf` days. The parameters are given by a transmission rate of `beta`, an average latency period of `1 / sigma` days and an average recovery period of `1 / gamma` days. <br>
+The system of differential equations that characterize this deterministic model are given by:
+$$
+\begin{aligned}
+  \frac{dX}{dt} & = - \beta \frac{XY}{N} \\
+  \frac{dW}{dt} & = \beta \frac{XY}{N} - \sigma W \\
+  \frac{dY}{dt} & = \sigma W - \gamma Y \\
+  \frac{dR}{dt} & = \gamma Y \\
+\end{aligned}
+$$
+where $X, W, Y, Z$ are the number of susceptibles, infected but not infectious, infected and recovered individuals in the population. 
+
+```{r}
+dseir <- function(N = 1e6, Y0 = 1, v = 0, beta = 5, sigma = 1/7, gamma = 1/7, 
+                 tf = 100, ...) {
+  vaccinated <- round(v * (N - Y0))
+  x0 <- c(X = N - Y0 - vaccinated, W = 0, Y = Y0, Z = vaccinated)
+  parameters <- c(beta = beta, sigma = sigma, gamma = gamma)
+  f <- function(t, state, parameters) {
+    with(as.list(c(state, parameters)), {
+      # rate of change
+      dX = -beta * X * Y / N
+      dW = beta * X * Y / N - sigma * W
+      dY = sigma * W - gamma * Y
+      dZ = gamma * Y 
+      
+      # rate the rate of change
+      list(c(dX, dW, dY, dZ))
+      })
+  }
+  times <- seq(0, tf, by = 1)
+  as.data.frame(ode(y = x0, times = times, func  = f, 
+                              parms = parameters))
+}
+```
+
+Let's run this deterministic SEIR with the default parameters. 
+```{r}
+dseir1 <- dseir(v = 0.5, tf = 100)
+ggplot(dseir1, aes(x = time, y = Y)) + geom_line() +
+  labs(x = "time (days)", y = "Prevalence")
+```
+
+Let's see how this compares to the stochastic SEIR model with analogous parameters
+```{r}
+set.seed(10)
+sseir1 <- seir(N = 1e6, I0 = 1, p = 0.5, beta = 5, sigma = 1/7, gamma = 1/7, tf = 100)
+plot(I ~ time, sseir1, xlab = "time (days)", ylab = "prevalance", col = "red", type = "l")
+par(new = TRUE)
+plot(Y ~ time, dseir1, ann = FALSE, axes = FALSE, col = "blue", type = "l")
+legend("topright", legend = c("Deterministic", "Stochastic"), col = c("blue","red"), pch = 1,  
+       bty = "n")
+```
+
+The prevalence curves for the single population deterministic and stochastic models are consistent. 
+
+### Approximate N-city model 
+
+#### Numerical approximation of the relationship between probability of epidemic and vaccine coverage
+We defined an epidemic as 10 or more secondary infections. We used this threshold to compute the probability that an epidemic occurs and the expected epidemic size in case there is an epidemic in a population of 1,000,000 individuals when a single infective is introduced. 
+
+```{r margin = FALSE, margin2 = TRUE}
+col1 <- "red"
+col2 <- "blue"
+plot(mean_epi_size ~ p, sim6, xlab = "vaccine coverage",
+     ylab = NA, col = col1, axes = FALSE)
+axis(1)
+axis(2, col = col1, col.axis = col1)
+title(ylab = "expected epidemic size", col.lab = col1)
+par(new = TRUE)
+plot(epi_proba ~ p, sim6, ann = FALSE, col = col2, axes = FALSE)
+axis(4, col = col2, col.axis = col2)
+mtext("probability of an epidemic", 4, 1.5, col = col2)
+```
+
+We would like to numerically approximate the above relationship between the probability of an epidemic and vaccine coverage. The following uses a natural cubic spline with 30 degrees of freedom to fit the model. 
+```{r}
+y1 <- smooth.spline(x = sim6$p, y = sim6$epi_proba, df = 30)
+vaccineValues <- data.frame(p = seq(0, 1, 0.01))
+fit <- predict(y1, x = vaccineValues)
+plot(epi_proba ~ p, sim6, pch=16)
+lines(fit$x$p, fit$y$p,lwd=2, col = "red", xlab = "vaccine coverage", ylab = "probability of an epidemic")
+```
+
+As expected, with 30 degrees of freedom the natural spline is a good fit to the data points. This function, as given by the red curve, will be used to estimate the probability that a population has an epidemic on any given day when there is a single infective introduced into the population. Furthermore, it was illustrated in some of the single population explorations above that the probability of an epidemic across different vaccine coverages is largely independent of population size. As such, this function can be used for different population sizes without modification. 
+
+#### Implementation of the N-city model
+There are `n` cities in the network each with population size and vaccine coverage given by vectors `N` and `v` respectively. The number of initial infectives in each city is `Y0`. Furthermore, the strength of association between the two cities is given by $\rho_{21}$ and $\rho_{12}$, where $\rho_{ij}$ denotes the coupling from city $j$ to city $i$.
+
+```{r}
+nCityApprox <- function(n = 2, N = c(1e6, 1e6), v = c(0.95, 0.95), Y0 = c(1, 0),
+                          rho = matrix(c(0, 0.01, 0.01, 0), nrow = 2, ncol = 2, byrow = TRUE), 
+                          tf = 365) {
+  
+ # Probability of epidemic for all populations starting with a single infective
+ epi_prob <- predict(y1, x = data.frame(v))$y$v
+
+ # Generate prevalence curves for infected populations
+  f1 <- function(x, y) {
+    if (x == 0)
+      return (rep(0, tf+1))
+    else
+      return (dseir(N = N[y], Y0 = Y0[y], v = v[y], tf = tf)$Y)
+  }
+  I <- purrr::map2(Y0, seq(1, n), f1)
+  I <- do.call(cbind, I)
+  
+  # Run the simulation over the specified time frame. 
+  for(t in 1:tf) {
+    for(i in which(I[t, ] == 0)) {
+      prob <- 1 - (1 - epi_prob[i])^(sum(I[t, ] * rho[, i]))
+      if (runif(1, 0, 1) < prob) 
+        I[, i] <- c(rep(0, t), dseir(N = N[i], Y0 = 1, v = v[i], tf = tf - t)$Y)
+    }
+  }
+  I <- as.data.frame(I) %>% mutate("time" = seq(1:(tf+1))) %>% select("time", dplyr::everything())
+  colnames(I) <- c("time", unlist(purrr::map(seq(1, n), function(x) c(paste0("I", x)))))
+  I
+}
+```
+
+Let's run this approximate model with the following parameters. 
+```{r}
+sim15 <- nCityApprox(n = 2, N = c(1e6, 1e6), v = c(0.95, 0.5), 
+                     Y0 = c(0, 1), tf = 400, 
+                     rho = matrix(c(0, 0.02, 0.1, 0), nrow = 2, ncol = 2, byrow = TRUE))
+```
+
+```{r}
+plot1 <- sim15 %>% gather(key = population, value = number, I1, I2) %>% 
+  ggplot(aes(x = time, y = number, color = population, group = population)) + geom_line() + 
+  labs(x = "Time (days)", y = "Prevalence", title = "Approximate Model")
+```
+
+Let's compare this approximate model with exact stochastic model 
+```{r}
+sim2City <- seirNCity(num = 2, N = c(1e6, 1e6), 
+                      p = c(0.95, 0.5), I0 = c(0, 1),
+                      fM = matrix(c(0.098, 0.002, 0.1, 0.9),
+                                 nrow = 2, ncol = 2, byrow = TRUE))
+```
+
+```{r}
+plot2 <- sim2City %>% dplyr::select(time, I1, I2) %>%
+  gather(key = population, value = number, I1, I2) %>%
+  ggplot(aes(x = time, y = number, color = population, group = population)) + geom_line() + 
+  labs(x = "Time (days)", y = "Prevalence", title = "Exact Model")
+```
+
+```{r}
+plot1
+plot2
+```
+
+The prevalence curves for population 1 for both the exact stochastic model and the approximate model show similar dynamics with comparable peak epidemic sizes and shapes. The prevalence curves for population 2 between the two models, however, are noticably different. it takes far longer for epidemic in population 2 in the approximate model to reach its peak size in comparison with that of the exact model. In particular, for population 2 in the approximate model, it takes about `r sim15[which(sim15$I1 == 1), 1][1]` days to get 1 infected individual and about `r sim15[which(sim15$I1 >= 10), 1][1]` days to get 10 infected individuals. In comparison, for population 2 in the exact model, it takes about `r sim2City[which(sim2City$I1 == 1), 1][1]` days to get 1 infected individual and about `r sim2City[which(sim2City$I1 > 10), 1][1]` days to get 10 infected individuals. This suggests that the epidemic spreads far quicker in population 2 in the exact model compared to that of the approximate model. In the approximate model, it was assumed that once an epidemic starts it is not influenced by coupling with different areas; that is, within population epidynamics are deterministic but between population dynamics are stochastic. It is this assumption that most likely accounts for the discrepency because the approximate model fails to account for the strong force of infection presented by neighboring populations when the epidemic is evolving. As such, it is necessary to account for this coupling in within population epidynamics. 
+
+For completeness, let's consider a slightly more complex model with three populations.
+```{r}
+sim16 <- nCityApprox(n = 3, N = c(1e6, 1e6, 1e6), 
+                       v = c(0.95, 0.5, 0.95), Y0 = c(0, 1, 0),
+                       rho = matrix(c(0, 0.001, 0.001, 0.1, 0, 0, 0.1, 0, 0), 
+                                 nrow = 3, ncol = 3, byrow = TRUE), tf = 700)
+```
+
+```{r}
+plot3 <- sim16 %>% gather(key = population, value = number, I1, I2, I3) %>%
+  ggplot(aes(x = time, y = number, color = population, group = population)) +
+  geom_line() + labs(x = "Time (days)", y = "Prevalence", title = "Approximate Model") +
+  xlim(0, 400)
+```
+
+Let's compare this approximate model with exact stochastic model.
+``` {r}
+sim3City <- seirNCity(num = 3, N = c(1e6, 1e6, 1e6), 
+                      p = c(0.95, 0.5, 0.95), I0 = c(0, 1, 0),
+                      fM = matrix(c(0.098, 0.001, 0.001, 0.1, 0.9, 0, 0.1, 0, 0.9), 
+                                 nrow = 3, ncol = 3, byrow = TRUE), tf = 150)
+```
+
+```{r}
+plot4 <- sim3City %>% dplyr::select(time, I1, I2, I3) %>%
+  gather(key = population, value = number, I1, I2, I3) %>%
+  ggplot(aes(x = time, y = number, color = population, group = population)) +
+  geom_line() + labs(x = "Time (days)", y = "Prevalence", title = "Exact Model")
+```
+
+```{r}
+plot3
+plot4
+```
+
+There are also noticiable lags in the approximate model compared to the exact stochastic model.
+
+
+## Second Approximation of the Population Network
+The following approximation of the exact stochastic model attempts to account for the lag effects that were observed in the first approximate model by coupling the deterministic populations along the way. 
+
+
+A 
+```{r}
+dseir <- function(N = 1e6, Y0 = 1, v = 0, beta = 5, sigma = 1/7, gamma = 1/7, 
+                 tf = 100, ...) {
+  vaccinated <- round(v * (N - Y0))
+  x0 <- c(X = N - Y0 - vaccinated, W = 0, Y = Y0, Z = vaccinated)
+  parameters <- c(beta = beta, sigma = sigma, gamma = gamma)
+  f <- function(t, state, parameters) {
+    with(as.list(c(state, parameters)), {
+      # rate of change
+      dX = -beta * X * Y / N
+      dW = beta * X * Y / N - sigma * W
+      dY = sigma * W - gamma * Y
+      dZ = gamma * Y 
+      
+      # rate the rate of change
+      list(c(dX, dW, dY, dZ))
+      })
+  }
+  times <- seq(0, tf, by = 1)
+  as.data.frame(ode(y = x0, times = times, func  = f, 
+                              parms = parameters))
+}
+```
+
+```{r}
+nCityApprox2 <- function(n = 2, N = c(1e6, 1e6), v = c(0.95, 0.95), Y0 = c(1, 0),
+                          rho = matrix(c(0, 0.01, 0.01, 0), nrow = 2, ncol = 2, byrow = TRUE), 
+                          tf = 365) {
+  
+ # Probability of epidemic for all populations starting with a single infective
+ epi_prob <- predict(y1, x = data.frame(v))$y$v
+
+ # Generate prevalence curves for infected populations
+  f1 <- function(x, y) {
+    if (x == 0)
+      return (rep(0, tf+1))
+    else
+      return (dseir(N = N[y], Y0 = Y0[y], v = v[y], tf = tf)$Y)
+  }
+  I <- purrr::map2(Y0, seq(1, n), f1)
+  I <- do.call(cbind, I)
+  
+  # Run the simulation over the specified time frame. 
+  for(t in 1:tf) {
+    for(i in which(I[t, ] == 0)) {
+      prob <- 1 - (1 - epi_prob[i])^(sum(I[t, ] * rho[, i]))
+      if (runif(1, 0, 1) < prob) 
+        I[, i] <- c(rep(0, t), dseir(N = N[i], Y0 = 1, v = v[i], tf = tf - t)$Y)
+    }
+  }
+  I <- as.data.frame(I) %>% mutate("time" = seq(1:(tf+1))) %>% select("time", dplyr::everything())
+  colnames(I) <- c("time", unlist(purrr::map(seq(1, n), function(x) c(paste0("I", x)))))
+  I
+}
 ```
