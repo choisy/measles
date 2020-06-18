@@ -1329,6 +1329,7 @@ nCityApprox2 <- function(n = 2, N = c(1e6, 1e6), v = c(0.95, 0.5), Y0 = c(1, 0),
  
  # Calculation of coupling coefficients
  cMatrix <- generate_coupling_matrix(n = n, N = N, fM = fM)
+  
 
  # Generate prevalence curves for initial infected populations
  P <- purrr::map(seq(1, n), function(x) 
@@ -1336,9 +1337,9 @@ nCityApprox2 <- function(n = 2, N = c(1e6, 1e6), v = c(0.95, 0.5), Y0 = c(1, 0),
                       Y = rep(0, tf+1), Z = rep(0, tf+1))))
  currentEpis <- which(Y0 > 0)
  if (length(currentEpis) > 1) {
-   z <- round(v[currentEpis] * (N[currentEpis] - Y0[currentEpis]))
+   z <- unlist(purrr::map(currentEpis, function(x) round(v[x] * (N[x] - Y0[x]))))
    y <- Y0[currentEpis]
-   x <- N[currentEpis] - Y0[currentEpis] - z[currentEpis]
+   x <- N[currentEpis] - Y0[currentEpis] - z[1:length(currentEpis)]
    w <- rep(0, length(currentEpis))
    newC <- cMatrix[currentEpis, ]
    newC <- newC[, currentEpis]
@@ -1479,6 +1480,7 @@ sim4City %>% dplyr::select(time, I1, I2, I3, I4) %>%
 
 Let's calculate the average time until the peak of the epidemic in all populations in both model.
 This will also serve as an opportunity to compare the running times of each of the models. 
+
 ```{r}
 library(timeR)
 f1 <- function(n = 4, N = c(1e6, 1e6, 1e6, 1e6), v = c(0.95, 0.5, 0.95, 0.95), Y0 = c(1, 1, 0, 0),
@@ -1515,3 +1517,51 @@ data.frame("Population 1 Peak" = exactModel[1], "Population 2 Peak" = exactModel
            "Population 3 Peak" = exactModel[3], "Population 4 Peak" = exactModel[4])
 timer
 ```
+
+Let's have a look at a trivial 10 population example. 
+```{r}
+sim23 <- nCityApprox2(n = 10, N = rep(1e6, 10), 
+                      v = c(0.95, 0.5, 0.95, 0.95, 0.95, 0.95, 0.7, 0.95, 0.95, 0.6),
+                      Y0 = c(1, 1, 0, 0, 0, 0, 1, 0, 0, 0),
+                      fM = matrix(rep(0.1, 100), nrow = 10, ncol = 10, byrow = FALSE), tf = 365)
+
+sim23 %>% dplyr::select(time, Y1:Y10) %>%
+  gather(key = population, value = number, Y1:Y10) %>%
+  ggplot(aes(x = time, y = number, color = population, group = population)) +
+  geom_line() + labs(x = "Time (days)", y = "Prevalence", title = "Approximate Model #2")
+```
+
+Let's calculate the average time until the peak of the epidemic in a 10 population network in both model.
+This will also serve as an opportunity to compare the running times of each of the models. 
+```{r}
+library(timeR)
+f1 <- function(n = 10, N = rep(1e6, 10), v = c(0.95, 0.5, 0.95, 0.95, 0.95, 0.95, 0.7, 0.95, 0.95, 0.6),
+               Y0 = c(1, 1, 0, 0, 0, 0, 1, 0, 0, 0),
+               fM = matrix(rep(0.1, 100), nrow = 10, ncol = 10, byrow = FALSE), tf = 200) {
+  df <- nCityApprox2(n = n, N = N, v = v, Y0 = Y0, tf = tf, fM = fM)
+  unlist(purrr::map(seq(2, 11), function(x) df[which.max(df[,x]), 1]))
+}
+
+f2 <- function(num = 10, N = rep(1e6, 10), p = c(0.95, 0.5, 0.95, 0.95, 0.95, 0.95, 0.7, 0.95, 0.95, 0.6),
+               I0 = c(1, 1, 0, 0, 0, 0, 1, 0, 0, 0),
+               fM = matrix(rep(0.1, 100), nrow = 10, ncol = 10, byrow = FALSE), tf = 200) {
+  df <- seirNCity(num = num, N = N, p = p, I0 = I0, fM = fM, tf = tf)
+  unlist(purrr::map(seq(2, 11), function(x) df[which.max(df[,x]), 1]))
+}
+
+timer <- createTimer(FALSE)
+n <- 100
+timer$start("Deterministic Model")
+approxModel <- colMeans(do.call(rbind, purrr::rerun(n, f1())))
+timer$stop("Deterministic Model")
+timer$start("Stochastic Model")
+test <- do.call(rbind, purrr::rerun(n, f2()))
+exactModel <- colMeans(do.call(rbind, purrr::rerun(n, f2())))
+timer$stop("Stochastic Model")
+```
+
+```{r}
+timer
+```
+
+The deterministic model scales poorly with the time frame, which is attributable to the fact that each time the system simulates the deterministic SEIR model over the set of populations currently experiencing epidemics the deterministic equations are numerically solved over the entire time frame even when the time to the next epidemic is relatively soon. 
