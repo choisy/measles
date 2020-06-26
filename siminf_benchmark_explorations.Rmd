@@ -1,0 +1,201 @@
+---
+title: "SimInf Benchmark Replication"
+author: "Taishi Nakase"
+date: "06/22/2020"
+csl: the-american-naturalist.csl
+output:
+    html_document:
+      theme: cerulean
+      toc: yes
+    pdf_document:
+      toc: yes
+bibligraphy: references.bib
+editor_options:
+  chunk_output_type: console
+---
+
+<style type = "text/css">
+.main-container {
+  max-width: 1370px;
+  margin-left: auto;
+  margin-right: auto,
+}
+</style>
+
+```{r general options, include = FALSE}
+knitr::knit_hooks$set(
+  margin = function(before, options, envir) {
+    if (before) par(mgp = c(1.5, .5, 0), bty = "n", plt = c(.105, .97, .13, .97))
+    else NULL
+  },
+  margin2 = function(before, options, envir) {
+    if (before) par(mgp = c(1.5, .5, 0), bty = "n", plt = c(.105, .895, .13, .97))
+    else NULL
+  },
+  prompt = function(before, options, envir) {
+    options(prompt = if (options$engine %in% c("sh", "bash")) "$ " else "> ")
+  })
+
+knitr::opts_chunk$set(cache = TRUE, autodep = TRUE, message = FALSE, warning = FALSE,
+                      margin = TRUE, dev.args = list(pointsize = 11), fig.height = 3.5,
+                      fig.width = 4.24725, fig.retina = 2, fig.align = "center")
+
+options(width = 137, scipen = 999)
+```
+
+## Packages
+
+```{r}
+required <- c("epiNetwork", "SimInf")
+to_install <- setdiff(required, row.names(installed.packages()))
+if (length(to_install)) install.packages(to_install)
+```
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(epiNetwork)
+library(adaptivetau)
+library(SimInf)
+```
+
+
+## Replicate Benchmark Simulations from SimInf Paper (My Attempt)
+The following is a small benchmark of the run-time of an SIR model using *SimInf* and *adaptivetau*. Ten replicates are performed and average run-time was estimated to generate 1,000 realizations of an SIR model with parameters $\beta = 0.16$ and $\gamma = 0.077$ and initial conditions $S = 1000, I = 10$ and $R = 0$. <br>
+
+The SIR model implemented with *SimInf*. 
+```{r Benchmark_SimInf}
+sir_siminf <- function(S = 1000, I = 10, R = 0, sims = 1, 
+                       beta = 0.16, gamma = 0.077, tf = 100) {
+  
+  # Build model
+  u0 <- data.frame(S = rep(S, sims), I = rep(I,sims), R = rep(R, sims))
+  tspan <- seq(0, tf, by = 1)
+  model <- SIR(u0 = u0, tspan = tspan, beta = beta, gamma = gamma)
+  
+  # Run 'sim' number of simulations of model
+  run(model = model)
+}
+```
+
+```{r Benchmark_SimInf2}
+sir_siminf2 <- function(S = 1000, I = 10, R = 0, sims = 1, beta = 0.16, gamma = 0.077, tf = 100) {
+  
+  # Build model
+  model  <- mparse(transitions = c("S -> beta*S*I/(S+I+R) -> I",
+                                 "I -> gamma*I -> R"),
+                   compartments = c("S", "I", "R"),
+                   gdata = c(beta = beta, gamma = gamma),
+                   u0 = data.frame(S = rep(S, sims), I = rep(I,sims), R = rep(R, sims)),
+                   tspan = 1:tf)
+  
+  # Run 'sim' number of simulations of model
+  run(model = model)
+}
+```
+
+The SIR model implemented with *adaptivetau*.
+```{r Benchmark_adaptivetau}
+sir_atau <- function(S = 1000, I = 10, R = 0, beta = 0.16, gamma = 0.077, tf = 100, sims = 1) {
+  
+  x0 <- c(S = S, I = I, R = R)
+  transitions <- list(c(S = -1, I = +1),  # infection
+                      c(I = -1, R = +1))  # recovery
+  lvrates <- function(x, params, t) {with(c(x, params), 
+                                          c(beta * S * I / (S + I + R),
+                                            gamma * I))
+  }
+  purrr::rerun(sims, data.frame(adaptivetau::ssa.adaptivetau(init.values = x0, transitions = transitions, 
+                                          rateFunc = lvrates, params = list(beta = beta, gamma = gamma), 
+                                          tf = tf)))
+}
+```
+
+Let's perform run-time analysis on these two implementations of stochastic simulation algorithm. 
+```{r BenchmarkTesting}
+# Simulates SIR in SimInf sims times and returns the mean time of peak prevalence
+f1 <- function(sims) {
+  simulations <- sir_siminf(sims = sims)
+  mean(unlist(purrr::map(1:sims, function(x) {tmp <- trajectory(model = simulations, node = x); 
+  tmp[which.max(tmp$I), 2]})))
+}
+
+# Simulates SIR in SimInf (mparse) sims times and returns the mean time of peak prevalence
+f2 <- function(sims) {
+  simulations <- sir_siminf2(sims = sims)
+  mean(unlist(purrr::map(1:sims, function(x) {tmp <- trajectory(model = simulations, node = x); 
+  tmp[which.max(tmp$I), 2]})))
+}
+
+# Simulates SIR in adaptivetau sims times and returns the mean time of peak prevalence
+f3 <- function(sims) {
+  simulations <- sir_atau(sims = sims)
+  mean(unlist(purrr::map(simulations, function(x) x[which.max(x$I), 1])))
+}
+
+# Timing of the models
+library(timeR)
+set.seed(123)
+timer <- createTimer(FALSE)
+n <- 1000
+replicates <- 50
+timer$start("SimInf Model")
+SimInfModel1 <- purrr::rerun(replicates, f1(sims = n))
+timer$stop("SimInf Model")
+timer$start("SimInf Model mparse")
+SimInfModel2 <- purrr::rerun(replicates, f2(sims = n))
+timer$stop("SimInf Model mparse")
+timer$start("adaptivetau Model")
+epiNetworkModel <- purrr::rerun(replicates, f3(sims = n))
+timer$stop("adaptivetau Model")
+
+```
+
+```{r}
+# Results
+data.frame(simInf = unlist(SimInfModel1), simInfmparse = unlist(SimInfModel2), adaptivetau = unlist(epiNetworkModel))
+timer$getTimeElapsed("SimInf Model") / replicates
+timer$getTimeElapsed("SimInf Model mparse") / replicates
+timer$getTimeElapsed("adaptivetau Model") / replicates
+```
+
+The SimInf implementation of the model appears to run faster than the adaptivetau implementation. 
+
+
+## Replicate Benchmark Simulations from SimInf Paper (Papers Attempt)
+Section 6: Benchmark Ten replicates were performed and average run-time was estimated to generate 1,000 realizations of an SIR model with parameters $\beta = 0.16$ and $\gamma = 0.077$ and initial conditions $S = 1000, I = 10$ and $R = 0$. 
+
+```{r}
+library("microbenchmark")
+```
+
+SimInf version
+```{r SimInf}
+u0 <- data.frame(S = rep(1000, 1000), I = rep(10, 1000), R = rep(0, 1000))
+tspan <- c(1, 150)
+model <- SIR(u0 = u0, tspan = tspan, beta = 0.16, gamma = 0.077)
+res1 <- microbenchmark(run(model, set_num_threads = 1, solver = "ssm"),
+                       run(model, set_num_threads = 2, solver = "ssm"),
+                       run(model, set_num_threads = 4, solver = "ssm"),
+                       run(model, solver = "ssm"),
+                       times = 10, unit = "ms")
+res1
+```
+
+## adaptivetau
+```{r adaptivetau}
+init.values <- c(S = 1000, I = 10, R = 0)
+transitions <- list(c(S = -1, I = +1), c(I = -1, R = +1))
+params <- list(beta = 0.16, gamma = 0.077)
+SIRrateF <- function(x, p, t) {
+  c(x["S"] * p$beta[1] * x["I"]/(x["S"] + x["I"] + x["R"]), p$gamma * x["I"])
+}
+res2 <- microbenchmark(replicate(1000, ssa.exact(init.values = init.values, transitions,
+                                                 SIRrateF, params = params, tf = 150)),
+                       replicate(1000, ssa.adaptivetau(init.values = init.values,
+                                                       transitions, SIRrateF,
+                                                       params = params, tf = 150)),
+                       times = 10L, unit = "ms")
+
+res2
+```
