@@ -1,0 +1,403 @@
+---
+title: "Colocation data"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+l <- "en_US.UTF-8"
+Sys.setenv(LANGAGE = l)
+Sys.setlocale(locale = l)
+Sys.setlocale("LC_MESSAGES", l)
+```
+
+## Packages
+
+```{r message = FALSE}
+library(sf)
+library(magrittr)
+library(stringr)
+library(lubridate)
+library(tidyr)
+library(purrr)
+library(dplyr) # best to load last
+```
+
+## Data
+
+### Colocation data
+
+The colocation data files are in the following folder:
+
+```{r}
+folder <- "~/Dropbox/aaa/studies/data for good/data/geoinsights/colocation maps"
+```
+
+The list of files:
+
+```{r}
+files <- dir(folder)
+```
+
+Making names from files names:
+
+```{r}
+weeks <- str_remove_all(files, "^.*__|.csv")
+```
+
+Loading the colocation data into a list (one slot per week):
+
+```{r message = FALSE}
+colocation <- paste0(folder, "/", dir(folder)) %>%
+  map(readr::read_csv) %>%
+  setNames(weeks)
+```
+
+The number of weeks:
+
+```{r}
+length(colocation)
+```
+
+The number of links for each week:
+
+```{r}
+(nb_links <- map_dbl(colocation, nrow))
+```
+
+Interesting to see by the way the effect of the lockdown:
+
+```{r}
+xs <- ymd(names(colocation))
+xlim <- ymd(c("2020-03-01", "2020-07-01"))
+plot(xs, nb_links, type = "o", xlab = NA, ylab = "number of links",
+     xlim = xlim, ylim = c(0, 710^2), col = "blue")
+```
+
+There is no missing value and no zeros in the link variable:
+
+```{r}
+link_val1 <- map(colocation, pull, link_value)
+link_val2 <- unlist(link_val1)
+any(is.na(link_val2))
+range(link_val2)
+```
+
+```{r}
+plot(xs, map_dbl(link_val1, sum), type = "o", col = "blue", xlim = xlim,
+     xlab = NA, ylab = "sums of probabilities")
+```
+
+Does it suggest that during the lockdown people have just made their movements
+more local? To be explored further I guess.
+
+### Polygons
+
+Downloading the polygons from [GADM](https://gadm.org):
+
+```{r eval = FALSE}
+download.file("https://biogeo.ucdavis.edu/data/gadm3.6/Rsf/gadm36_VNM_0_sf.rds", "gadm36_VNM_0_sf.rds")
+download.file("https://biogeo.ucdavis.edu/data/gadm3.6/Rsf/gadm36_VNM_1_sf.rds", "gadm36_VNM_1_sf.rds")
+download.file("https://biogeo.ucdavis.edu/data/gadm3.6/Rsf/gadm36_VNM_2_sf.rds", "gadm36_VNM_2_sf.rds")
+```
+
+Loading the polygons:
+
+```{r}
+vn0 <- readRDS("gadm36_VNM_0_sf.rds") # country polygon
+vn1 <- readRDS("gadm36_VNM_1_sf.rds") # provinces polygons
+vn2 <- readRDS("gadm36_VNM_2_sf.rds") # districts polygons
+```
+
+## Getting rid off whatever is not linked to Vietnam
+
+### The problem
+
+Here we show what the problem is (i.e. some of the data are outside Vietnam).
+The following function plots the colocation data:
+
+```{r}
+plot_fb <- function(df, xlim, ylim, col) {
+  plot(xlim, ylim, asp = 1, xlab = "longitude", ylab = "latitude", type = "n")
+  maps::map(col = "grey", fill = TRUE, add = TRUE)
+  points(df[[1]], df[[2]], pch = ".", col = col)
+  axis(1)
+  axis(2)
+  box(bty = "o")
+}
+```
+
+Let's consider one week:
+
+```{r}
+june23 <- colocation$`2020-06-23`
+```
+
+The locations in this week are within these boundaries:
+
+```{r}
+(xlim <- range(range(june23$lon_1), range(june23$lon_2)))
+(ylim <- range(range(june23$lat_1), range(june23$lat_2)))
+```
+
+Let's plot the polygon 1:
+
+```{r}
+june23 %>%
+  select(lon_1, lat_1) %>% 
+  distinct() %>% 
+  plot_fb(xlim, ylim, "blue")
+```
+
+And the polygon 2:
+
+```{r}
+june23 %>%
+  select(lon_2, lat_2) %>% 
+  distinct() %>% 
+  plot_fb(xlim, ylim, "red")
+```
+
+### The solution
+
+In the following function, `df` is a data frame with the same column names as
+a "colocation map" data frame. `pl` is an `sf` non-projected polygon. `type` is
+either `1` or `2`.
+
+```{r}
+pts_in_pol <- function(type, df, pl, project = FALSE) {
+  # assumes that sf is not projected.
+  # 4326: non-projected
+  # 3857: pseudo-Mercator (e.g. Google Maps)
+  require(magrittr)
+  require(sf)
+  df %<>% st_as_sf(coords = paste0(c("lon_", "lat_"), type), crs = 4326)
+  if (project) {
+    df %<>% st_transform(3857)
+    pl %<>% st_transform(3857)
+  }
+  df %>%
+    st_intersects(pl) %>% 
+    purrr::map_int(length)
+}
+```
+
+The function returns a vector of length equal to the number of rows of `df` with
+`1` if the points is inside the polygon `pl` and `0` otherwise. Let's try it:
+
+```{r}
+tmp <- pts_in_pol(1, june23, vn0)
+```
+
+It takes 3.5' and it's about 3 times slower if we project the points and polygon.
+The arguments of the following function are the same as the previous one. It
+uses the previous one to delete the records from `df` that have start and end
+coordinates that are outside `pl`:
+
+```{r}
+rcd_in_pol <- function(df, pl, project = FALSE) {
+  require(magrittr)
+  1:2 %>%
+    parallel::mclapply(pts_in_pol, df, pl, project, mc.cores = 2) %>% 
+    as.data.frame() %>%
+    rowSums() %>% 
+    is_greater_than(0) %>% 
+    magrittr::extract(df, ., ) # there is an extract() function in tidyr too
+}
+```
+
+Let's try it:
+
+```{r eval = FALSE}
+june23 %<>% rcd_in_pol(vn0)
+```
+
+Let's process all the data (takes about 1 minute):
+
+```{r}
+colocation %<>% map(rcd_in_pol, vn0)
+```
+
+## Working out a district dictionary
+
+### Identifying districts in the polygons data
+
+The names of the province and the district uniquely identify a district in the
+polygons:
+
+```{r}
+nrow(vn2)
+```
+
+and
+
+```{r}
+vn2 %>%
+  as_tibble() %>%
+  select(NAME_1, NAME_2) %>%
+  distinct() %>% 
+  nrow()
+```
+
+but the name of the district only is not enough:
+
+```{r}
+vn2 %>% 
+  as_tibble() %>% 
+  select(NAME_2) %>% 
+  distinct() %>% 
+  nrow()
+```
+
+### Fixing some districts names in the GADM data
+
+```{r}
+vn2 %<>% 
+  mutate(NAME_2 = str_remove(NAME_2, "Thành Phố |Thị Xã |Quận "))
+```
+
+
+### The districts in the colocation data
+
+```{r}
+col_names <- c("polygon_id", "polygon_name", "lon", "lat", "name_stack")
+
+districts1 <- map_dfr(colocation, select, polygon1_id, polygon1_name, lon_1, lat_1, name_stack_1) %>% 
+  setNames(col_names)
+
+districts2 <- map_dfr(colocation, select, polygon2_id, polygon2_name, lon_2, lat_2, name_stack_2) %>% 
+  setNames(col_names)
+
+districts <- bind_rows(districts1, districts2) %>%
+  distinct()
+```
+
+Some districts seem to be missing.
+
+### Province name missing for some districts of Hanoi
+
+In the colocation data, the `name_stack_*` variables contains the names of the
+province and the district separated by ` // `. The problem is that there are a
+number of districts that do not have ` // ` in their `name_stack` variable and
+all of them seem to be in the province of Hanoi:
+
+```{r}
+plot(st_geometry(vn0), col = "grey")
+
+vn1 %>%
+  filter(NAME_1 == "Hà Nội") %>%
+  st_geometry() %>%
+  plot(add = TRUE, col = "white")
+
+districts %>% 
+  filter(! grepl(" // ", name_stack)) %>% 
+  st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+  st_geometry() %>% 
+  plot(add = TRUE, col = "red")
+```
+
+### Separating province name from district name in the colocation data
+
+Plus a number of names fixes:
+
+```{r}
+districts %<>% 
+  separate(name_stack, c("province", "district"), " // ") %>% 
+  mutate(indicate = is.na(district),
+         district = ifelse(indicate, province, district),
+         province = ifelse(indicate, "Hanoi City", province) %>% 
+           str_squish() %>% 
+           str_remove(" Province| City") %>% 
+           str_replace("-", " - ") %>% 
+           str_replace("Da Nang"     , "Đà Nẵng") %>%
+           str_replace("Hanoi"       , "Hà Nội") %>% 
+           str_replace("Hai Phong"   , "Hải Phòng") %>%
+           str_replace("Ho Chi Minh" , "Hồ Chí Minh") %>%
+           str_replace("Hòa Bình"    , "Hoà Bình"),
+         polygon_name = polygon_name %>% 
+           str_remove("Huyện |Thành phố |Thị xã |Quận |Thành Phố |Thị Xã ") %>%
+           str_replace("Quy Nhơn"    , "Qui Nhơn") %>% 
+           str_replace("Đảo Phú Quý" , "Phú Quí") %>% 
+           str_replace("Bình Thủy"   , "Bình Thuỷ") %>% 
+           str_replace("Hòa An"      , "Hoà An") %>% 
+           str_replace("Phục Hòa"    , "Phục Hoà") %>% 
+           str_replace("Thái Hòa"    , "Thái Hoà") %>% 
+           str_replace("Hạ Hòa"      , "Hạ Hoà") %>% 
+           str_replace("Phú Hòa"     , "Phú Hoà") %>% 
+           str_replace("Tây Hòa"     , "Tây Hoà") %>% 
+           str_replace("Tuy Hòa"     , "Tuy Hoà") %>% 
+           str_replace("Krông Ana"   , "Krông A Na") %>% 
+           str_replace("Krông A Na"  , "Krông A Na") %>% ##
+           str_replace("Krông Păk"   , "Krông Pắc") %>% 
+           str_replace("Krông Pắc"   , "Krông Pắc") %>% ##
+           str_replace("Đắk Glong"   , "Đăk Glong") %>% 
+           str_replace("Đắk Rlấp"    , "Đắk R'Lấp") %>% 
+           str_replace("A Yun Pa"    , "Ayun Pa") %>% 
+           str_replace("Từ Liêm"     , "Nam Từ Liêm") %>% 
+           str_replace("Kiến Thụy"   , "Kiến Thuỵ") %>% 
+           str_replace("Thủy Nguyên" , "Thuỷ Nguyên") %>% 
+           str_replace("Vị Thủy"     , "Vị Thuỷ") %>% 
+           str_replace("Bác Ai"      , "Bác Ái") %>% 
+           str_replace("Thanh Thủy"  , "Thanh Thuỷ") %>% 
+           str_replace("Yên Hưng"    , "Quảng Yên") %>% 
+           str_replace("Na Hang"     , "Nà Hang") %>% 
+           str_replace("Mù Cang Chải", "Mù Căng Chải") %>%
+           str_replace("M`Đrắk"      , "M'Đrắk") %>% 
+           str_replace("Cư M`Gar"    , "Cư M'gar") %>% 
+           str_replace("Ea H`Leo"    , "Ea H'leo") %>% 
+           str_replace("Buôn Hồ"     , "Buôn Hồ") %>% 
+           str_squish(),
+         polygon_name = ifelse(province == "Bạc Liêu" & polygon_name == "Hòa Bình",
+                               "Hoà Bình", polygon_name)) %>% 
+  select(-indicate, -district) %>% 
+  rename(district = polygon_name)
+```
+
+The warnings are produced when the provinces names are missing for some of the
+districts of Hanoi.
+
+Separating the districts names per province for both sources:
+
+```{r}
+colo <- split(districts$district, districts$province)
+gadm <- split(vn2$NAME_2, vn2$NAME_1)
+```
+
+Checking that the provinces names are the same in both data sets and that they
+are in the same order:
+
+```{r}
+identical(names(gadm), names(colo))
+```
+
+Identifying the provinces for which the names of the districts in the colocation
+data do not match those in the GADM data:
+
+```{r}
+all_prov <- map2(colo, gadm, ~ is.element(.x, .y))
+sel_prov <- which(! map_lgl(all_prov, all)) 
+indexes <- map(tmp[sel_prov], ~ which(! .x))
+map2(sel_prov, indexes, ~ colo[[.x]][.y])
+```
+
+The only problem seems to be that the "Côn Đảo" district from the
+"Bà Rịa - Vũng Tàu" province seems to be missing from the GADM data.
+
+## Let's look at the districts that never have any data
+
+```{r}
+vn0 %>% 
+  st_geometry() %>% 
+  plot(col = "grey")
+
+vn2 %>% 
+  mutate(pd = paste(NAME_1, NAME_2)) %>% 
+  filter(! pd %in% with(districts, paste(province, district))) %>% 
+  st_geometry() %>% 
+  plot(add = TRUE, col = "red")
+```
+
+
