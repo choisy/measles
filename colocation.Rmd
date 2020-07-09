@@ -1,12 +1,29 @@
 ---
 title: "Colocation data"
-output: html_document
+output:
+  html_document:
+    toc: yes
 editor_options: 
   chunk_output_type: console
 ---
 
 ```{r setup, include = FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::knit_hooks$set(
+  margin1 = function(before, options, envir) {
+    if (before) par(mgp = c(1.5, .5, 0), bty = "n", plt = c(.105, .97, .13, .97))
+    else NULL
+  },
+  margin2 = function(before, options, envir) {
+    if (before) par(mgp = c(2, .5, 0), bty = "n", plt = c(.105, .97, .13, .97))
+    else NULL
+  }
+)
+
+knitr::opts_chunk$set(echo       = TRUE,
+                      cache      = TRUE,
+                      margin1     = TRUE,
+                      fig.retina = 2,
+                      fig.align  = "center")
 
 l <- "en_US.UTF-8"
 Sys.setenv(LANGAGE = l)
@@ -18,6 +35,8 @@ Sys.setlocale("LC_MESSAGES", l)
 
 ```{r message = FALSE}
 library(sf)
+library(stars)
+library(osmdata)
 library(magrittr)
 library(stringr)
 library(lubridate)
@@ -26,9 +45,465 @@ library(purrr)
 library(dplyr) # best to load last
 ```
 
-## Data
+```{r}
+hist2 <- function(...) hist(..., main = NA)
+```
 
-### Colocation data
+## Population density raster data
+
+Downloading the population density data from [WorldPop](https://www.worldpop.org):
+
+```{r eval = FALSE}
+download.file("ftp://ftp.worldpop.org.uk/GIS/Population/Individual_countries/VNM/Viet_Nam_100m_Population/VNM_ppp_v2b_2020_UNadj.tif",
+              "VNM_ppp_v2b_2020_UNadj.tif")
+```
+
+Loading the data:
+
+```{r}
+worldpop <- read_stars("VNM_ppp_v2b_2020_UNadj.tif")
+```
+
+## Google and Apple mobility data
+
+Downloading the population mobility data:
+
+```{r eval = FALSE}
+download.file("https://www.dropbox.com/s/6fl62gcuma9890f/google.rds?raw=1", "google.rds")
+download.file("https://www.dropbox.com/s/uuxxjm3cgs0a4gw/apple.rds?raw=1", "apple.rds")
+```
+
+Loading the data:
+
+```{r eval = FALSE}
+google <- readRDS("google.rds")
+apple <- readRDS("apple.rds") %>% 
+  mutate_if(is.numeric, subtract, 100)
+```
+
+## Polygons from GADM
+
+Downloading the polygons from [GADM](https://gadm.org):
+
+```{r eval = FALSE}
+download.file("https://biogeo.ucdavis.edu/data/gadm3.6/Rsf/gadm36_VNM_0_sf.rds", "gadm36_VNM_0_sf.rds")
+download.file("https://biogeo.ucdavis.edu/data/gadm3.6/Rsf/gadm36_VNM_1_sf.rds", "gadm36_VNM_1_sf.rds")
+download.file("https://biogeo.ucdavis.edu/data/gadm3.6/Rsf/gadm36_VNM_2_sf.rds", "gadm36_VNM_2_sf.rds")
+download.file("https://biogeo.ucdavis.edu/data/gadm3.6/Rsf/gadm36_VNM_3_sf.rds", "gadm36_VNM_3_sf.rds")
+download.file("https://biogeo.ucdavis.edu/data/gadm2.8/rds/VNM_adm2.rds"       , "VNM_adm2.rds")
+download.file("https://biogeo.ucdavis.edu/data/gadm2.8/rds/VNM_adm3.rds"       , "VNM_adm3.rds")
+```
+
+Loading the polygons:
+
+```{r}
+vn0 <- readRDS("gadm36_VNM_0_sf.rds")     # country polygon
+vn1 <- readRDS("gadm36_VNM_1_sf.rds")     # provinces polygons
+
+vn2 <- readRDS("gadm36_VNM_2_sf.rds") %>% # districts polygons
+  transmute(province = str_squish(NAME_1),
+            district = str_squish(NAME_2) %>%
+              str_remove_all("Thành Phố |Thị Xã |Quận "))
+
+vn3 <- readRDS("gadm36_VNM_3_sf.rds") %>% # districts polygons
+  transmute(province = str_squish(NAME_1),
+            district = str_squish(NAME_2) %>%
+              str_remove_all("Thành Phố |Thị Xã |Quận "),
+            commune  = str_squish(NAME_3))
+
+vn2_old <- readRDS("VNM_adm2.rds") %>%    # old version of the districts polygons
+  st_as_sf() %>% 
+  transmute(province = str_squish(NAME_1),
+            district = str_squish(NAME_2) %>% 
+              str_remove_all("Thành Phố |Thị Xã |Quận ") %>% 
+              str_replace("Chiêm Hoá", "Chiêm Hóa"))
+
+vn3_old <- readRDS("VNM_adm3.rds") %>%    # old version of the communes polygons
+  st_as_sf() %>% 
+  transmute(province = str_squish(NAME_1),
+            district = str_squish(NAME_2) %>% 
+              str_remove_all("Thành Phố |Thị Xã |Quận ") %>% 
+              str_replace("Chiêm Hoá", "Chiêm Hóa"),
+            commune = str_squish(NAME_3)) %>% 
+  arrange(province, district, commune)
+```
+
+Removing the commune Huæi Luông from the district Sìn Hồ:
+
+```{r}
+vn2_old %<>% 
+  filter(district == "Sìn Hồ") %>% 
+  st_set_geometry(st_union(filter(vn3_old, district == "Sìn Hồ", commune != "Huæi Luông"))) %>% 
+  rbind(filter(vn2_old, district != "Sìn Hồ")) %>% 
+  arrange(province, district)
+```
+
+## Adding the polygon for Côn Đảo from OpenStreetMap
+
+Downloading the administrative boundaries from [OpenStreetMap](https://www.openstreetmap.org):
+
+```{r}
+con_dao <- c(106.523384, 8.622214, 106.748218, 8.782639) %>%
+  opq() %>% 
+  add_osm_feature(key = "boundary", value = "administrative") %>% 
+  osmdata_sf()
+```
+
+The main island is made of lines. Let's transform them into a polygon:
+
+```{r}
+main_island <- con_dao$osm_lines %>%
+  st_combine() %>%
+  st_polygonize() %>%
+  st_geometry() %>%
+  st_collection_extract("POLYGON")
+```
+
+The other islands are already polygons. Let's extract and merge them with the
+newly created polygon of the main island:
+
+```{r}
+con_dao <- con_dao$osm_polygons %>%
+  st_geometry() %>% 
+  c(main_island) %>% 
+  st_multipolygon() %>% 
+  st_sfc(crs = st_crs(vn2))
+```
+
+Let's add the polygon of Côn Đảo to the GADM data:
+
+```{r}
+vn2 %<>%
+  filter(province == "Bà Rịa - Vũng Tàu") %>% 
+  head(1) %>% 
+  mutate(district = "Côn Đảo") %>% 
+  st_set_geometry(con_dao) %>% 
+  rbind(vn2)
+```
+
+## Adding the census 2019 data
+
+For some reason the province of `Vĩnh Long` is missing... We add information
+form [Wikipedia](https://en.wikipedia.org/wiki/Vĩnh_Long_Province#Administrative_divisions):
+
+```{r}
+census <- readRDS("~/Dropbox/aaa/studies/oucomo/clean data/census2019.rds") %>% 
+  group_by(province, district) %>% 
+  summarise(n = sum(n)) %>% 
+  ungroup() %>% 
+  mutate(province = str_squish(province) %>%
+                    str_remove_all("Thành phố |Tỉnh ") %>% 
+                    str_replace("Đăk Lăk"             , "Đắk Lắk") %>% 
+                    str_replace("Đăk Nông"            , "Đắk Nông") %>% 
+                    str_replace("Khánh Hoà"           , "Khánh Hòa") %>% 
+                    str_replace("Thanh Hoá"           , "Thanh Hóa"),
+         district = str_squish(district) %>%
+                    str_replace("Thành phố Cao Lãnh"  , "Cao Lãnh (Thành phố)") %>% 
+                    str_replace("Thị xã Hồng Ngự"     , "Hồng Ngự (Thị xã)") %>% 
+                    str_replace("Thị xã Kỳ Anh"       , "Kỳ Anh (Thị xã)") %>% 
+                    str_replace("Thị xã Long Mỹ"      , "Long Mỹ (Thị xã)") %>% 
+                    str_replace("Thị xã Cai Lậy"      , "Cai Lậy (Thị xã)") %>% 
+                    str_replace("Thị xã Duyên Hải"    , "Duyên Hải (Thị xã)") %>% 
+                    str_remove_all("Huyện |Huỵên |Quận |Thành phố |Thành Phô |Thành Phố |Thị xã |Thị Xã ") %>% 
+                    str_replace("Hoà Vang"            , "Hòa Vang") %>% 
+                    str_replace("Ứng Hoà"             , "Ứng Hòa") %>% 
+                    str_replace("Đồng Phù"            , "Đồng Phú") %>% 
+                    str_replace("Đắk Glong"           , "Đăk Glong") %>% 
+                    str_replace("Ia H’Drai"           , "Ia H' Drai") %>% 
+                    str_replace("ý Yên"               , "Ý Yên") %>% 
+                    str_replace("Bác ái"              , "Bác Ái") %>% 
+                    str_replace("Phan Rang- Tháp Chàm", "Phan Rang-Tháp Chàm") %>% 
+                    str_replace("Đông Hoà"            , "Đông Hòa") %>% 
+                    str_replace("Tuy Hòa"             , "Tuy Hoà") %>% 
+                    str_replace("Thiệu Hoá"           , "Thiệu Hóa")) %>% 
+  bind_rows(
+    bind_cols(
+      data.frame(province = rep("Vĩnh Long", 8)),
+      tribble(
+        ~district  ,     ~n,
+        "Bình Tân" ,  93758, # 2009
+        "Long Hồ"  , 160537, # 2018
+        "Mang Thít", 103573, # 2018
+        "Tam Bình" , 162191, # 2003
+        "Trà Ôn"   , 149983, # 2003
+        "Vũng Liêm", 176233, # 2003
+        "Bình Minh",  95282, # 2003
+        "Vĩnh Long", 200120  # 2018
+      )
+    ),
+    tribble(
+      ~province  , ~district     , ~n, 
+      "Điện Biên", "Mường Ảng"   ,  37077, # 2006
+      "Hải Phòng", "Bạch Long Vĩ",    912, # 2018
+      "Phú Thọ"  , "Thanh Sơn"   , 187700, # 2003
+      "Quảng Trị", "Cồn Cỏ"      ,    400  # 2003
+    )
+  )
+```
+
+```{r}
+identical(sort(unique(census$province)), sort(unique(vn2$province)))
+```
+
+```{r}
+anti_join(census, vn2, c("province", "district"))
+anti_join(vn2, census, c("province", "district"))
+```
+
+```{r}
+vn2 %<>% left_join(census, c("province", "district"))
+```
+
+```{r}
+vn2 %>% 
+  st_drop_geometry() %>% 
+  group_by(province, district) %>% 
+  tally() %>% 
+  filter(n > 1)
+```
+
+## Merging some districts
+
+The colocation data use the [Bing](https://www.bing.com/maps) polygons, which do
+not seem to be very much up to date. In order to adjust for that, we need to
+merge the following districts in the GADM data:
+
+* Hà Tĩnh: merge Kỳ Anh (Thị xã) into Kỳ Anh that split in 2015
+* Hậu Giang: merge Long Mỹ (Thị xã) into Long Mỹ that split in 2015
+* Tiền Giang: merge Cai Lậy (Thị xã) into Cai Lậy that split in 2013
+* Trà Vinh: merge Duyên Hải (Thị xã) into Duyên Hải that split in 2015
+* Bình Dương: merge Bắc Tân Uyên into Tân Uyên that split in 2013
+* Bình Dương: merge Bàu Bàng into Bến Cát that split in 2013
+* Hà Nội: merge Bắc Từ Liêm and Nam Từ Liêm into Từ Liêm that split in 2013
+* Long An: merge Kiến Tường into Mộc Hóa that split in 2013
+* Nghệ An: merge Hoàng Mai into Quỳnh Lưu that split in 2013
+* Quảng Bình: merge Ba Đồn into Quảng Trạch that split in 2013
+
+Furthermore, some of the districts need to be split in two, with each part
+merged to a different district. That's the case for these 3 districts:
+
+* Điện Biên: split Nậm Pồ into 2 parts and merge them with Mường Chà and Mường Nhé (2012)
+* Lai Châu: split Nậm Nhùn into 2 parts and merge them with Mường Tè and Sìn Hồ (2012)
+* Tuyên Quang: split Lâm Bình into 2 parts and merge them with Nà Hang and Chiêm Hóa (2011)
+
+As illustrated below:
+
+```{r}
+plot_districts <- function(d1, d2, d3) {
+  vn2 %>% 
+    filter(district %in% c(d1, d2, d3)) %>% 
+    st_geometry() %>% 
+    plot(col = "grey")
+  
+  vn2 %>% 
+    filter(district == d1) %>% 
+    st_geometry() %>% 
+    plot(add = TRUE, col = "red")
+  
+  vn2_old %>% 
+    filter(district %in% c(d2, d3)) %>% 
+    st_geometry() %>% 
+    plot(add = TRUE, border = "blue", lwd = 2)
+}
+```
+
+```{r}
+plot_districts("Nậm Pồ"  , "Mường Chà", "Mường Nhé")
+plot_districts("Lâm Bình", "Nà Hang"  , "Chiêm Hóa")
+plot_districts("Nậm Nhùn", "Mường Tè" , "Sìn Hồ")
+```
+
+Here are two functions to fix these 2 above-mentioned problems. Here is the
+first function:
+
+```{r}
+merge_districts <- function(vn, d1, d2, p) {
+  dst <- c(d1, d2)
+  
+  tmp <- vn %>% 
+    filter(district %in% dst, province == p) %>% 
+    mutate(n = sum(n))
+  
+  tmp %<>% 
+    filter(district %in% d1) %>% 
+    st_set_geometry(st_union(tmp))
+  
+  vn %>% 
+    filter(! (district %in% dst & province == p)) %>% 
+    rbind(tmp) %>% 
+    arrange(province, district)
+}
+```
+
+The second function needs this function:
+
+```{r}
+proportion <- function(to_cut, one_district, new_vn = vn2, old_vn = vn2_old, rstr = worldpop) {
+  to_cut <- filter(new_vn, district == to_cut)
+  one_part <- st_intersection(to_cut, filter(old_vn, district == one_district))
+  
+  wp0 <- rstr %>%
+    st_crop(to_cut) %>% 
+    st_as_stars() %>% 
+    unlist() %>% 
+    sum(na.rm = TRUE)
+  
+  rstr %>% 
+    st_crop(one_part) %>% 
+    st_as_stars() %>% 
+    unlist() %>% 
+    sum(na.rm = TRUE) %>% 
+    divide_by(wp0)
+}
+```
+
+Let's try it:
+
+```{r warning = FALSE, message = FALSE}
+proportion("Nậm Nhùn", "Mường Tè" , vn2, vn2_old, worldpop)
+proportion("Nậm Pồ"  , "Mường Chà", vn2, vn2_old, worldpop)
+proportion("Lâm Bình", "Nà Hang"  , vn2, vn2_old, worldpop)
+```
+
+And here is the second function we needed:
+
+```{r}
+merge_back_districts <- function(c2, d1, d2, d3, c1 = vn2_old, rstr = worldpop) {
+  dsts <- c(d1, d2, d3)
+  
+  tmp <- c2 %>% 
+    filter(district %in% dsts) %$%
+    setNames(n, district)
+
+  half1 <- round(proportion(d1, d2, c2, c1, rstr) * tmp[d1])
+
+  half2 <- tmp[d1] - half1
+  tmp[d2] <- tmp[d2] + half1
+  tmp[d3] <- tmp[d3] + half2
+  tmp <- tmp[dsts[-1]]
+  
+  c1 %>% 
+    filter(district %in% dsts[-1]) %>% 
+    mutate(n = tmp) %>% 
+    select(everything(), geometry) %>% 
+    rbind(filter(c2, ! district %in% dsts)) %>% 
+    arrange(province, district)
+}
+```
+
+Let's now call these 2 functions to do the mergings:
+
+```{r warning = FALSE, message = FALSE}
+vn2 %<>%
+  merge_districts("Kỳ Anh"     , "Kỳ Anh (Thị xã)"   , "Hà Tĩnh") %>% 
+  merge_districts("Long Mỹ"    , "Long Mỹ (Thị xã)"  , "Hậu Giang") %>% 
+  merge_districts("Cai Lậy"    , "Cai Lậy (Thị xã)"  , "Tiền Giang") %>% 
+  merge_districts("Duyên Hải"  , "Duyên Hải (Thị xã)", "Trà Vinh") %>% 
+  merge_districts("Tân Uyên"   , "Bắc Tân Uyên"      , "Bình Dương") %>%
+  merge_districts("Bến Cát"    , "Bàu Bàng"          , "Bình Dương") %>% 
+  merge_districts("Bắc Từ Liêm", "Nam Từ Liêm"       , "Hà Nội") %>% # then rename to Từ Liêm
+  merge_districts("Mộc Hóa"    , "Kiến Tường"        , "Long An") %>% 
+  merge_districts("Quỳnh Lưu"  , "Hoàng Mai"         , "Nghệ An") %>% 
+  merge_districts("Quảng Trạch", "Ba Đồn"            , "Quảng Bình") %>% 
+  merge_back_districts("Nậm Pồ"  , "Mường Chà", "Mường Nhé") %>% 
+  merge_back_districts("Nậm Nhùn", "Mường Tè" , "Sìn Hồ") %>% 
+  merge_back_districts("Lâm Bình", "Nà Hang"  , "Chiêm Hóa") %>% 
+  mutate(district = str_replace(district, "Bắc Từ Liêm", "Từ Liêm")) # here the renaming
+```
+
+Let's calculate the areas:
+
+```{r}
+vn2 %<>% 
+  mutate(area = vn2 %>%
+           st_geometry() %>% 
+           st_area()) %>% 
+  select(everything(), geometry)
+```
+
+## Visualizations
+
+### Population sizes
+
+```{r}
+hist2(vn2$n, n = 50, xlab = "population size", ylab = "number of districts", axes = FALSE)
+axis(1, seq(0, 1e6, 2e5), format(seq(0, 10, 2) * 1e5, big.mark = ",", scientific = FALSE, trim = TRUE))
+axis(2)
+```
+
+```{r}
+cb <- RColorBrewer::brewer.pal(9, "YlOrBr")
+color_generator <- colorRampPalette(cb)
+pal <- color_generator(10)
+```
+
+```{r}
+hist2(vn2$n, quantile(vn2$n, seq(0, 1, le = 11)), col = pal, axes = FALSE,
+      xlab = "population size", ylab = "density of probability")
+axis(1, seq(0, 1e6, 2e5), format(seq(0, 10, 2) * 1e5, big.mark = ",", scientific = FALSE, trim = TRUE))
+axis(2)
+```
+
+```{r}
+vn2 %>% 
+  select(n) %>% 
+  plot(lwd = .1, col = pal[cut(vn2$n, quantile(vn2$n, seq(0, 1, le = 11)))], main = NA)
+
+vn0 %>% 
+  st_geometry() %>% 
+  plot(add = TRUE)
+```
+
+```{r}
+mean(vn2$n)
+median(vn2$n)
+```
+
+### Areas
+
+```{r margin1 = FALSE, margin2 = TRUE}
+hist2(vn2$area / 1e6, n = 50,
+      xlab = expression(paste("area ", (km^2))), ylab = "number of districts")
+```
+
+```{r}
+mean(as.numeric(vn2$area / 1e6))
+median(as.numeric(vn2$area / 1e6))
+```
+
+### Densities
+
+```{r}
+(quants <- quantile(as.numeric(1e6 * vn2$n / vn2$area), c(.025, .25, .5, .75, .975)))
+```
+
+```{r margin1 = FALSE, margin2 = TRUE}
+hist2(log10(as.numeric(1e6 * vn2$n / vn2$area)), n = 50, axes = FALSE,
+      xlab = expression(paste("density (/", km^2, ")")), ylab = "number of districts")
+axis(1, 1:4, c("10", "100", "1000", "10000"))
+axis(2)
+abline(v = log10(quants), lty = c(3, 2, 1, 2, 3), col = "blue")
+```
+
+```{r margin1 = FALSE, margin2 = TRUE}
+xs <- log10(as.numeric(1e6 * vn2$n / vn2$area))
+hist2(xs, quantile(xs, seq(0, 1, le = 11)), col = pal, axes = FALSE,
+      xlab = expression(paste("density (/", km^2, ")")), ylab = "density of probability")
+axis(1, 1:4, c("10", "100", "1000", "10000"))
+axis(2)
+```
+
+```{r}
+vn2 %>% 
+  transmute(dens = 1e6 * n / area) %>% 
+  plot(lwd = .1, col = pal[cut(vn2$n, quantile(vn2$n, seq(0, 1, le = 11)))], main = NA)
+
+vn0 %>% 
+  st_geometry() %>% 
+  plot(add = TRUE)
+```
+
+## Colocation data
 
 The colocation data files are in the following folder:
 
@@ -40,6 +515,12 @@ The list of files:
 
 ```{r}
 files <- dir(folder)
+```
+
+There are `r length(files)` of them:
+
+```{r}
+length(files)
 ```
 
 Making names from files names:
@@ -56,60 +537,43 @@ colocation <- paste0(folder, "/", dir(folder)) %>%
   setNames(weeks)
 ```
 
-The number of weeks:
+The colocation data looks like this:
 
 ```{r}
-length(colocation)
+head(colocation, 1)
 ```
 
-The number of links for each week:
+Interesting to see, by the way, the effect of the lockdown:
 
 ```{r}
-(nb_links <- map_dbl(colocation, nrow))
+nd <- nrow(vn2)
+ld <- ymd(c(20200401, 20200422))
+ys <- c(-1e5, 6e5)
+xs <- ymd(names(colocation)) - 6
+nb_links <- map_dbl(colocation, nrow)
+xlim <- ymd(c("2020-02-29", "2020-07-01"))
+plot(xs, nb_links, type = "s", xlab = NA, ylab = "number of links",
+     xlim = xlim, ylim = c(0, nd^2), col = "blue")
+abline(h = nd^2, lty = 2, col = "grey")
+polygon(c(ld, rev(ld)), rep(ys, each = 2), col = adjustcolor("red", .25), border = NA)
 ```
 
-Interesting to see by the way the effect of the lockdown:
+Let's look at the sum of the probability per week:
 
 ```{r}
-xs <- ymd(names(colocation))
-xlim <- ymd(c("2020-03-01", "2020-07-01"))
-plot(xs, nb_links, type = "o", xlab = NA, ylab = "number of links",
-     xlim = xlim, ylim = c(0, 710^2), col = "blue")
-```
-
-There is no missing value and no zeros in the link variable:
-
-```{r}
-link_val1 <- map(colocation, pull, link_value)
-link_val2 <- unlist(link_val1)
-any(is.na(link_val2))
-range(link_val2)
-```
-
-```{r}
-plot(xs, map_dbl(link_val1, sum), type = "o", col = "blue", xlim = xlim,
+link_val <- map(colocation, pull, link_value)
+plot(xs, map_dbl(link_val, sum), type = "s", col = "blue", xlim = xlim,
      xlab = NA, ylab = "sums of probabilities")
+polygon(c(ld, rev(ld)), rep(ys, each = 2), col = adjustcolor("red", .25), border = NA)
 ```
 
-Does it suggest that during the lockdown people have just made their movements
-more local? To be explored further I guess.
-
-### Polygons
-
-Downloading the polygons from [GADM](https://gadm.org):
-
-```{r eval = FALSE}
-download.file("https://biogeo.ucdavis.edu/data/gadm3.6/Rsf/gadm36_VNM_0_sf.rds", "gadm36_VNM_0_sf.rds")
-download.file("https://biogeo.ucdavis.edu/data/gadm3.6/Rsf/gadm36_VNM_1_sf.rds", "gadm36_VNM_1_sf.rds")
-download.file("https://biogeo.ucdavis.edu/data/gadm3.6/Rsf/gadm36_VNM_2_sf.rds", "gadm36_VNM_2_sf.rds")
-```
-
-Loading the polygons:
+The 10th week looks suspicious. There is no missing value and no zeros in the
+link variable:
 
 ```{r}
-vn0 <- readRDS("gadm36_VNM_0_sf.rds") # country polygon
-vn1 <- readRDS("gadm36_VNM_1_sf.rds") # provinces polygons
-vn2 <- readRDS("gadm36_VNM_2_sf.rds") # districts polygons
+link_val %<>% unlist()
+any(is.na(link_val))
+range(link_val)
 ```
 
 ## Getting rid off whatever is not linked to Vietnam
@@ -172,8 +636,6 @@ pts_in_pol <- function(type, df, pl, project = FALSE) {
   # assumes that sf is not projected.
   # 4326: non-projected
   # 3857: pseudo-Mercator (e.g. Google Maps)
-  require(magrittr)
-  require(sf)
   df %<>% st_as_sf(coords = paste0(c("lon_", "lat_"), type), crs = 4326)
   if (project) {
     df %<>% st_transform(3857)
@@ -181,7 +643,7 @@ pts_in_pol <- function(type, df, pl, project = FALSE) {
   }
   df %>%
     st_intersects(pl) %>% 
-    purrr::map_int(length)
+    map_int(length)
 }
 ```
 
@@ -221,46 +683,9 @@ Let's process all the data (takes about 1 minute):
 colocation %<>% map(rcd_in_pol, vn0)
 ```
 
-## Working out a district dictionary
+## Working out a district ID common to GADM + census and colocation data
 
-### Identifying districts in the polygons data
-
-The names of the province and the district uniquely identify a district in the
-polygons:
-
-```{r}
-nrow(vn2)
-```
-
-and
-
-```{r}
-vn2 %>%
-  as_tibble() %>%
-  select(NAME_1, NAME_2) %>%
-  distinct() %>% 
-  nrow()
-```
-
-but the name of the district only is not enough:
-
-```{r}
-vn2 %>% 
-  as_tibble() %>% 
-  select(NAME_2) %>% 
-  distinct() %>% 
-  nrow()
-```
-
-### Fixing some districts names in the GADM data
-
-```{r}
-vn2 %<>% 
-  mutate(NAME_2 = str_remove(NAME_2, "Thành Phố |Thị Xã |Quận "))
-```
-
-
-### The districts in the colocation data
+The list of district in the colocation data:
 
 ```{r}
 col_names <- c("polygon_id", "polygon_name", "lon", "lat", "name_stack")
@@ -275,8 +700,6 @@ districts <- bind_rows(districts1, districts2) %>%
   distinct()
 ```
 
-Some districts seem to be missing.
-
 ### Province name missing for some districts of Hanoi
 
 In the colocation data, the `name_stack_*` variables contains the names of the
@@ -290,7 +713,7 @@ plot(st_geometry(vn0), col = "grey")
 vn1 %>%
   filter(NAME_1 == "Hà Nội") %>%
   st_geometry() %>%
-  plot(add = TRUE, col = "white")
+  plot(add = TRUE, col = "yellow")
 
 districts %>% 
   filter(! grepl(" // ", name_stack)) %>% 
@@ -317,7 +740,9 @@ districts %<>%
            str_replace("Hai Phong"   , "Hải Phòng") %>%
            str_replace("Ho Chi Minh" , "Hồ Chí Minh") %>%
            str_replace("Hòa Bình"    , "Hoà Bình"),
-         polygon_name = polygon_name %>% 
+         polygon_name = str_squish(polygon_name) %>% 
+           str_replace("Thành Phố Cao Lãnh", "Cao Lãnh (Thành phố)") %>% 
+           str_replace("Thị Xã Hồng Ngự", "Hồng Ngự (Thị xã)") %>% 
            str_remove("Huyện |Thành phố |Thị xã |Quận |Thành Phố |Thị Xã ") %>%
            str_replace("Quy Nhơn"    , "Qui Nhơn") %>% 
            str_replace("Đảo Phú Quý" , "Phú Quí") %>% 
@@ -348,8 +773,8 @@ districts %<>%
            str_replace("M`Đrắk"      , "M'Đrắk") %>% 
            str_replace("Cư M`Gar"    , "Cư M'gar") %>% 
            str_replace("Ea H`Leo"    , "Ea H'leo") %>% 
-           str_replace("Buôn Hồ"     , "Buôn Hồ") %>% 
-           str_squish(),
+           str_replace("Nam Từ Liêm" , "Từ Liêm") %>% 
+           str_replace("Buôn Hồ"     , "Buôn Hồ"),
          polygon_name = ifelse(province == "Bạc Liêu" & polygon_name == "Hòa Bình",
                                "Hoà Bình", polygon_name)) %>% 
   select(-indicate, -district) %>% 
@@ -357,36 +782,14 @@ districts %<>%
 ```
 
 The warnings are produced when the provinces names are missing for some of the
-districts of Hanoi.
-
-Separating the districts names per province for both sources:
+districts of Hanoi. Separating the districts names per province for both sources:
 
 ```{r}
-colo <- split(districts$district, districts$province)
-gadm <- split(vn2$NAME_2, vn2$NAME_1)
+anti_join(districts, vn2, c("province", "district"))
+anti_join(vn2, districts, c("province", "district"))
 ```
 
-Checking that the provinces names are the same in both data sets and that they
-are in the same order:
-
-```{r}
-identical(names(gadm), names(colo))
-```
-
-Identifying the provinces for which the names of the districts in the colocation
-data do not match those in the GADM data:
-
-```{r}
-all_prov <- map2(colo, gadm, ~ is.element(.x, .y))
-sel_prov <- which(! map_lgl(all_prov, all)) 
-indexes <- map(tmp[sel_prov], ~ which(! .x))
-map2(sel_prov, indexes, ~ colo[[.x]][.y])
-```
-
-The only problem seems to be that the "Côn Đảo" district from the
-"Bà Rịa - Vũng Tàu" province seems to be missing from the GADM data.
-
-## Let's look at the districts that never have any data
+Let's map these districts that never have any data:
 
 ```{r}
 vn0 %>% 
@@ -394,10 +797,64 @@ vn0 %>%
   plot(col = "grey")
 
 vn2 %>% 
-  mutate(pd = paste(NAME_1, NAME_2)) %>% 
+  mutate(pd = paste(province, district)) %>% 
   filter(! pd %in% with(districts, paste(province, district))) %>% 
   st_geometry() %>% 
   plot(add = TRUE, col = "red")
+```
+
+Let's add these 5 districts to `districts`:
+
+```{r}
+tmp <- vn2 %>% 
+  mutate(pd = paste(province, district)) %>% 
+  filter(! pd %in% with(districts, paste(province, district)))
+
+districts <- tmp %>%
+  st_centroid() %>% 
+  st_coordinates() %>% 
+  as_tibble() %>% 
+  transmute(lon = X, lat = Y) %>% 
+  bind_cols(tmp) %>% 
+  mutate(polygon_id = 850001:850005) %>% 
+  select(polygon_id, district, lon, lat, province) %>% 
+  bind_rows(districts)
+```
+
+## Rearranging the colocation data into a matrix
+
+Let's generate a template with all the combinations of districts:
+
+```{r}
+template <- districts %>% 
+  arrange(polygon_id) %$%
+  expand.grid(polygon_id, polygon_id) %>% 
+  as_tibble() %>% 
+  setNames(c("polygon1_id", "polygon2_id"))
+```
+
+The function that transform the colocation data into a matrix:
+
+```{r}
+to_matrix <- function(df, template) {
+  dim_names <- sort(unique(template$polygon1_id))
+  df %>% 
+    select(polygon1_id, polygon2_id, link_value) %>% 
+    left_join(template, ., c("polygon1_id", "polygon2_id")) %>%
+    mutate(link_value = replace_na(link_value, 0)) %>% 
+    pull(link_value) %>% 
+    matrix(nrow(districts)) %>%
+    `colnames<-`(dim_names) %>% 
+    `rownames<-`(dim_names)
+}
+```
+
+Let's do it for all the weeks and sum them:
+
+```{r}
+coloc_mat <- colocation %>% 
+  map(to_matrix, template) %>% 
+  reduce(`+`)
 ```
 
 
