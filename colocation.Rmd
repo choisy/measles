@@ -16,12 +16,16 @@ knitr::knit_hooks$set(
   margin2 = function(before, options, envir) {
     if (before) par(mgp = c(2, .5, 0), bty = "n", plt = c(.105, .97, .13, .97))
     else NULL
+  },
+  margin3 = function(before, options, envir) {
+    if (before) par(mgp = c(1.5, .5, 0), bty = "n", mai = rep(.1, 4))
+    else NULL
   }
 )
 
 knitr::opts_chunk$set(echo       = TRUE,
                       cache      = TRUE,
-                      margin1     = TRUE,
+                      margin1    = TRUE,
                       fig.retina = 2,
                       fig.align  = "center")
 
@@ -30,6 +34,45 @@ Sys.setenv(LANGAGE = l)
 Sys.setlocale(locale = l)
 Sys.setlocale("LC_MESSAGES", l)
 ```
+
+## Links to local data sets
+
+Here we use the following links to data.
+
+```{r}
+census_path <- "~/Dropbox/aaa/studies/oucomo/clean data/census2019.rds"
+colocation_path <- "~/Dropbox/aaa/studies/data for good/data/geoinsights/colocation maps/"
+```
+
+Change them accordingly if you want to run the script locally on your computer.
+
+## Preambule
+
+This document shows how to combine 3 data sets:
+
+* the colocation dataset from the Facebook's
+[Data for Good](https://dataforgood.fb.com) initiative;
+* the geographical polygons from [GADM](https://gadm.org) (UC Davis);
+* the 2019 population census data of Vietnam from [GSO](https://www.gso.gov.vn).
+
+These three data sets provide information by district (roughly 700 in Vietnam).
+The difficulties come from the fact that these 3 datasets listed above do not
+have exactly the same districts definitions. Indeed, as the population grows
+with time, districts tend to split. The problems we had to deal with here are
+
+* one province and a few other districts are missing from the 2019 census data.
+Missing value were completed by hand with data from
+[Wikipedia](https://en.wikipedia.org/wiki/Vĩnh_Long_Province#Administrative_divisions).
+* the polygon of one district is missing from GADM. This was completed by hand
+with data from [OpenStreetMap](https://www.openstreetmap.org).
+* the colocation dataset uses the district definition from
+[Bing](https://www.bing.com/maps) that dates from at least 10 years back,
+meaning that we have to merge a number of districts in both GADM and the census
+data in order to make them consistent with the definition used in the colocation
+data. In some cases, we had to split a district before merging the 2 parts to 2
+different districts. In order to split the population accurately, we used also
+population density raster data from [WorldPop](https://www.worldpop.org)
+(University of Southampton).
 
 ## Packages
 
@@ -89,7 +132,6 @@ Downloading the polygons from [GADM](https://gadm.org):
 download.file("https://biogeo.ucdavis.edu/data/gadm3.6/Rsf/gadm36_VNM_0_sf.rds", "gadm36_VNM_0_sf.rds")
 download.file("https://biogeo.ucdavis.edu/data/gadm3.6/Rsf/gadm36_VNM_1_sf.rds", "gadm36_VNM_1_sf.rds")
 download.file("https://biogeo.ucdavis.edu/data/gadm3.6/Rsf/gadm36_VNM_2_sf.rds", "gadm36_VNM_2_sf.rds")
-download.file("https://biogeo.ucdavis.edu/data/gadm3.6/Rsf/gadm36_VNM_3_sf.rds", "gadm36_VNM_3_sf.rds")
 download.file("https://biogeo.ucdavis.edu/data/gadm2.8/rds/VNM_adm2.rds"       , "VNM_adm2.rds")
 download.file("https://biogeo.ucdavis.edu/data/gadm2.8/rds/VNM_adm3.rds"       , "VNM_adm3.rds")
 ```
@@ -104,12 +146,6 @@ vn2 <- readRDS("gadm36_VNM_2_sf.rds") %>% # districts polygons
   transmute(province = str_squish(NAME_1),
             district = str_squish(NAME_2) %>%
               str_remove_all("Thành Phố |Thị Xã |Quận "))
-
-vn3 <- readRDS("gadm36_VNM_3_sf.rds") %>% # districts polygons
-  transmute(province = str_squish(NAME_1),
-            district = str_squish(NAME_2) %>%
-              str_remove_all("Thành Phố |Thị Xã |Quận "),
-            commune  = str_squish(NAME_3))
 
 vn2_old <- readRDS("VNM_adm2.rds") %>%    # old version of the districts polygons
   st_as_sf() %>% 
@@ -170,6 +206,14 @@ con_dao <- con_dao$osm_polygons %>%
   st_sfc(crs = st_crs(vn2))
 ```
 
+Here are the polygons for Côn Đảo:
+
+```{r}
+con_dao %>% 
+  st_geometry() %>% 
+  plot(col = "grey")
+```
+
 Let's add the polygon of Côn Đảo to the GADM data:
 
 ```{r}
@@ -187,7 +231,8 @@ For some reason the province of `Vĩnh Long` is missing... We add information
 form [Wikipedia](https://en.wikipedia.org/wiki/Vĩnh_Long_Province#Administrative_divisions):
 
 ```{r}
-census <- readRDS("~/Dropbox/aaa/studies/oucomo/clean data/census2019.rds") %>% 
+census <- census_path %>%
+  readRDS() %>% 
   group_by(province, district) %>% 
   summarise(n = sum(n)) %>% 
   ungroup() %>% 
@@ -290,15 +335,18 @@ As illustrated below:
 
 ```{r}
 plot_districts <- function(d1, d2, d3) {
-  vn2 %>% 
+  tmp <- vn2 %>% 
     filter(district %in% c(d1, d2, d3)) %>% 
-    st_geometry() %>% 
-    plot(col = "grey")
+    st_geometry()
+  
+  plot(tmp)
+  plot(worldpop, add = TRUE, main = NA)
+  plot(tmp, add = TRUE, col = adjustcolor("green", .2))
   
   vn2 %>% 
     filter(district == d1) %>% 
     st_geometry() %>% 
-    plot(add = TRUE, col = "red")
+    plot(add = TRUE, col = adjustcolor("red", .2))
   
   vn2_old %>% 
     filter(district %in% c(d2, d3)) %>% 
@@ -313,8 +361,10 @@ plot_districts("Lâm Bình", "Nà Hang"  , "Chiêm Hóa")
 plot_districts("Nậm Nhùn", "Mường Tè" , "Sìn Hồ")
 ```
 
-Here are two functions to fix these 2 above-mentioned problems. Here is the
-first function:
+The raster data shows the population density from
+[WorldPop](https://www.worldpop.org) that we'll use to split the population of
+the red district into the 2 blue districts. Here are two functions to fix these
+2 above-mentioned problems. Here is the first function:
 
 ```{r}
 merge_districts <- function(vn, d1, d2, p) {
@@ -446,7 +496,7 @@ axis(2)
 
 ```{r}
 vn2 %>% 
-  select(n) %>% 
+  st_geometry() %>% 
   plot(lwd = .1, col = pal[cut(vn2$n, quantile(vn2$n, seq(0, 1, le = 11)))], main = NA)
 
 vn0 %>% 
@@ -482,7 +532,7 @@ hist2(log10(as.numeric(1e6 * vn2$n / vn2$area)), n = 50, axes = FALSE,
       xlab = expression(paste("density (/", km^2, ")")), ylab = "number of districts")
 axis(1, 1:4, c("10", "100", "1000", "10000"))
 axis(2)
-abline(v = log10(quants), lty = c(3, 2, 1, 2, 3), col = "blue")
+abline(v = log10(quants), lty = c(3, 2, 1, 2, 3), col = "blue", lwd = 2)
 ```
 
 ```{r margin1 = FALSE, margin2 = TRUE}
@@ -496,6 +546,7 @@ axis(2)
 ```{r}
 vn2 %>% 
   transmute(dens = 1e6 * n / area) %>% 
+  st_geometry() %>% 
   plot(lwd = .1, col = pal[cut(vn2$n, quantile(vn2$n, seq(0, 1, le = 11)))], main = NA)
 
 vn0 %>% 
@@ -505,16 +556,10 @@ vn0 %>%
 
 ## Colocation data
 
-The colocation data files are in the following folder:
+The list of colocation data files:
 
 ```{r}
-folder <- "~/Dropbox/aaa/studies/data for good/data/geoinsights/colocation maps"
-```
-
-The list of files:
-
-```{r}
-files <- dir(folder)
+files <- dir(colocation_path)
 ```
 
 There are `r length(files)` of them:
@@ -532,7 +577,7 @@ weeks <- str_remove_all(files, "^.*__|.csv")
 Loading the colocation data into a list (one slot per week):
 
 ```{r message = FALSE}
-colocation <- paste0(folder, "/", dir(folder)) %>%
+colocation <- paste0(colocation_path, dir(colocation_path)) %>%
   map(readr::read_csv) %>%
   setNames(weeks)
 ```
@@ -547,13 +592,13 @@ Interesting to see, by the way, the effect of the lockdown:
 
 ```{r}
 nd <- nrow(vn2)
-ld <- ymd(c(20200401, 20200422))
+ld <- ymd(c(20200401, 20200423))
 ys <- c(-1e5, 6e5)
 xs <- ymd(names(colocation)) - 6
 nb_links <- map_dbl(colocation, nrow)
 xlim <- ymd(c("2020-02-29", "2020-07-01"))
 plot(xs, nb_links, type = "s", xlab = NA, ylab = "number of links",
-     xlim = xlim, ylim = c(0, nd^2), col = "blue")
+     xlim = xlim, ylim = c(0, nd^2), col = "blue", lwd = 2)
 abline(h = nd^2, lty = 2, col = "grey")
 polygon(c(ld, rev(ld)), rep(ys, each = 2), col = adjustcolor("red", .25), border = NA)
 ```
@@ -563,7 +608,7 @@ Let's look at the sum of the probability per week:
 ```{r}
 link_val <- map(colocation, pull, link_value)
 plot(xs, map_dbl(link_val, sum), type = "s", col = "blue", xlim = xlim,
-     xlab = NA, ylab = "sums of probabilities")
+     xlab = NA, ylab = "sums of probabilities", lwd = 2)
 polygon(c(ld, rev(ld)), rep(ys, each = 2), col = adjustcolor("red", .25), border = NA)
 ```
 
@@ -700,6 +745,12 @@ districts <- bind_rows(districts1, districts2) %>%
   distinct()
 ```
 
+This is what it looks like:
+
+```{r}
+districts
+```
+
 ### Province name missing for some districts of Hanoi
 
 In the colocation data, the `name_stack_*` variables contains the names of the
@@ -791,21 +842,31 @@ anti_join(vn2, districts, c("province", "district"))
 
 Let's map these districts that never have any data:
 
-```{r}
+```{r warning = FALSE}
 vn0 %>% 
   st_geometry() %>% 
   plot(col = "grey")
 
-vn2 %>% 
+tmp <- vn2 %>% 
   mutate(pd = paste(province, district)) %>% 
-  filter(! pd %in% with(districts, paste(province, district))) %>% 
+  filter(! pd %in% with(districts, paste(province, district)))
+
+tmp %>% 
   st_geometry() %>% 
+  plot(add = TRUE, col = "red")
+
+tmp %>%
+  st_centroid() %>% 
+  st_coordinates() %>% 
+  as_tibble() %>% 
+  filter(between(Y, 15, 20.5)) %>%
+  st_as_sf(coords = c("X", "Y")) %>% 
   plot(add = TRUE, col = "red")
 ```
 
 Let's add these 5 districts to `districts`:
 
-```{r}
+```{r warning = FALSE}
 tmp <- vn2 %>% 
   mutate(pd = paste(province, district)) %>% 
   filter(! pd %in% with(districts, paste(province, district)))
@@ -820,6 +881,13 @@ districts <- tmp %>%
   select(polygon_id, district, lon, lat, province) %>% 
   bind_rows(districts)
 ```
+
+This is what it looks like now:
+
+```{r}
+districts
+```
+
 
 ## Rearranging the colocation data into a matrix
 
@@ -857,4 +925,88 @@ coloc_mat <- colocation %>%
   reduce(`+`)
 ```
 
+Let's have a look at this matrix. Let's first order the district from south to
+north and from west to east:
+
+```{r}
+hash <- setNames(seq_along(colnames(coloc_mat)),
+                           colnames(coloc_mat))
+ind <- districts %>% 
+  arrange(lat, lon) %>% 
+  pull(polygon_id) %>% 
+  as.character() %>% 
+  magrittr::extract(hash, .)
+
+coloc_mat <- coloc_mat[ind, ind]
+```
+
+Let's now plot the matrix:
+
+```{r margin1 = FALSE, margin3 = TRUE}
+opar <- par(pty = "s")
+image(log10(apply(t(coloc_mat), 2, rev)), axes = FALSE)
+par(opar)
+box(bty = "o")
+```
+
+We can verify that the matrix is symmetric and that both Hanoi and Saigon are
+well connected to every where in the country. We can see also the district that
+are not connected at all.
+
+### Subsetting according to coordinates
+
+Let's say we want to select all the provinces from the Northern EPI, the
+southernmost province of which is Nghệ An. Let's retrieve the latitude of the
+centroids of all the provinces:
+
+```{r}
+tmp <- vn1 %>% 
+  st_centroid() %>% 
+  st_coordinates() %>% 
+  as_tibble() %>% 
+  pull(Y) %>% 
+  mutate(vn1, lat_cent = .) %>% 
+  select(NAME_1, lat_cent)
+```
+
+The province south of Nghệ An is Hà Tĩnh, the latitude of centroid of which is:
+
+```{r}
+threshold <- tmp %>% 
+  filter(NAME_1 == "Hà Tĩnh") %>% 
+  pull(lat_cent)
+```
+
+Now, we retrieve all the names of all the provinces that are north of this
+threshold:
+
+```{r}
+northernEPI <- tmp %>% 
+  filter(lat_cent > threshold) %>% 
+  pull(NAME_1)
+```
+
+Now, we retrieve the corresponding districts' ID:
+
+```{r}
+sel <- districts %>% 
+  filter(province %in% northernEPI) %>% 
+  pull(polygon_id)
+```
+
+And now we can subset our matrix:
+
+```{r}
+sel <- colnames(coloc_mat) %in% sel
+coloc_mat_northernEPI <- coloc_mat[sel, sel]
+```
+
+Which gives:
+
+```{r margin1 = FALSE, margin3 = TRUE}
+opar <- par(pty = "s")
+image(log10(apply(t(coloc_mat_northernEPI), 2, rev)), axes = FALSE)
+par(opar)
+box(bty = "o")
+```
 
