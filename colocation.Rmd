@@ -465,9 +465,11 @@ Let's calculate the areas:
 
 ```{r}
 vn2 %<>% 
-  mutate(area = vn2 %>%
+  mutate(area_km2 = vn2 %>%
            st_geometry() %>% 
-           st_area()) %>% 
+           st_area() %>% 
+           as.numeric() %>% 
+           divide_by(1e6)) %>% 
   select(everything(), geometry)
 ```
 
@@ -512,23 +514,23 @@ median(vn2$n)
 ### Areas
 
 ```{r margin1 = FALSE, margin2 = TRUE}
-hist2(vn2$area / 1e6, n = 50,
+hist2(vn2$area_km2, n = 50,
       xlab = expression(paste("area ", (km^2))), ylab = "number of districts")
 ```
 
 ```{r}
-mean(as.numeric(vn2$area / 1e6))
-median(as.numeric(vn2$area / 1e6))
+mean(vn2$area_km2)
+median(vn2$area_km2)
 ```
 
 ### Densities
 
 ```{r}
-(quants <- quantile(as.numeric(1e6 * vn2$n / vn2$area), c(.025, .25, .5, .75, .975)))
+(quants <- quantile(vn2$n / vn2$area_km2, c(.025, .25, .5, .75, .975)))
 ```
 
 ```{r margin1 = FALSE, margin2 = TRUE}
-hist2(log10(as.numeric(1e6 * vn2$n / vn2$area)), n = 50, axes = FALSE,
+hist2(log10(vn2$n / vn2$area_km2), n = 50, axes = FALSE,
       xlab = expression(paste("density (/", km^2, ")")), ylab = "number of districts")
 axis(1, 1:4, c("10", "100", "1000", "10000"))
 axis(2)
@@ -536,7 +538,7 @@ abline(v = log10(quants), lty = c(3, 2, 1, 2, 3), col = "blue", lwd = 2)
 ```
 
 ```{r margin1 = FALSE, margin2 = TRUE}
-xs <- log10(as.numeric(1e6 * vn2$n / vn2$area))
+xs <- log10(vn2$n / vn2$area_km2)
 hist2(xs, quantile(xs, seq(0, 1, le = 11)), col = pal, axes = FALSE,
       xlab = expression(paste("density (/", km^2, ")")), ylab = "density of probability")
 axis(1, 1:4, c("10", "100", "1000", "10000"))
@@ -545,13 +547,25 @@ axis(2)
 
 ```{r}
 vn2 %>% 
-  transmute(dens = 1e6 * n / area) %>% 
+  transmute(dens = n / area_km2) %>% 
   st_geometry() %>% 
   plot(lwd = .1, col = pal[cut(vn2$n, quantile(vn2$n, seq(0, 1, le = 11)))], main = NA)
 
 vn0 %>% 
   st_geometry() %>% 
   plot(add = TRUE)
+```
+
+The relationship between the population size and the population density:
+
+```{r}
+vn2 %>% 
+  mutate(dens = n / area_km2) %$%
+  plot(log10(n), log10(dens), col = "blue", axes = FALSE, xlab = "population size",
+       ylab = expression(paste("population density (/", km^2, ")")))
+
+axis(1, 3:6, format(10^(3:6), big.mark = ",", scientific = FALSE, trim = TRUE))
+axis(2, 1:4, format(10^(1:4), big.mark = ",", scientific = FALSE, trim = TRUE))
 ```
 
 ## Colocation data
@@ -586,39 +600,6 @@ The colocation data looks like this:
 
 ```{r}
 head(colocation, 1)
-```
-
-Interesting to see, by the way, the effect of the lockdown:
-
-```{r}
-nd <- nrow(vn2)
-ld <- ymd(c(20200401, 20200423))
-ys <- c(-1e5, 6e5)
-xs <- ymd(names(colocation)) - 6
-nb_links <- map_dbl(colocation, nrow)
-xlim <- ymd(c("2020-02-29", "2020-07-01"))
-plot(xs, nb_links, type = "s", xlab = NA, ylab = "number of links",
-     xlim = xlim, ylim = c(0, nd^2), col = "blue", lwd = 2)
-abline(h = nd^2, lty = 2, col = "grey")
-polygon(c(ld, rev(ld)), rep(ys, each = 2), col = adjustcolor("red", .25), border = NA)
-```
-
-Let's look at the sum of the probability per week:
-
-```{r}
-link_val <- map(colocation, pull, link_value)
-plot(xs, map_dbl(link_val, sum), type = "s", col = "blue", xlim = xlim,
-     xlab = NA, ylab = "sums of probabilities", lwd = 2)
-polygon(c(ld, rev(ld)), rep(ys, each = 2), col = adjustcolor("red", .25), border = NA)
-```
-
-The 10th week looks suspicious. There is no missing value and no zeros in the
-link variable:
-
-```{r}
-link_val %<>% unlist()
-any(is.na(link_val))
-range(link_val)
 ```
 
 ## Getting rid off whatever is not linked to Vietnam
@@ -726,6 +707,41 @@ Let's process all the data (takes about 1 minute):
 
 ```{r}
 colocation %<>% map(rcd_in_pol, vn0)
+```
+
+## Exploring the colocation data
+
+Interesting to see, by the way, the effect of the lockdown:
+
+```{r}
+nd <- nrow(vn2)
+ld <- ymd(c(20200401, 20200423))
+ys <- c(-1e5, 6e5)
+xs <- ymd(names(colocation)) - 6
+nb_links <- map_dbl(colocation, nrow)
+xlim <- ymd(c("2020-02-29", "2020-07-01"))
+plot(xs, nb_links, type = "s", xlab = NA, ylab = "number of links",
+     xlim = xlim, ylim = c(0, nd^2), col = "blue", lwd = 2)
+abline(h = nd^2, lty = 2, col = "grey")
+polygon(c(ld, rev(ld)), rep(ys, each = 2), col = adjustcolor("red", .25), border = NA)
+```
+
+Let's look at the sum of the probability per week:
+
+```{r}
+link_val <- map(colocation, pull, link_value)
+plot(xs, map_dbl(link_val, sum), type = "s", col = "blue", xlim = xlim,
+     xlab = NA, ylab = "sums of probabilities", lwd = 2)
+polygon(c(ld, rev(ld)), rep(ys, each = 2), col = adjustcolor("red", .25), border = NA)
+```
+
+The 10th week looks suspicious. There is no missing value and no zeros in the
+link variable:
+
+```{r}
+link_val %<>% unlist()
+any(is.na(link_val))
+range(link_val)
 ```
 
 ## Working out a district ID common to GADM + census and colocation data
@@ -888,6 +904,62 @@ This is what it looks like now:
 districts
 ```
 
+Let's merge this information with the polygon / census data:
+
+```{r}
+vn2 %<>% 
+  left_join(districts, c("province", "district")) %>% 
+  select(polygon_id, province, district, n, area_km2, lon, lat, geometry)
+```
+
+and this what it looks like now:
+
+```{r}
+vn2
+```
+
+## Exploring further the colocation data
+
+```{r}
+colocation$`2020-03-03` %>%
+  group_by(polygon1_id) %>%
+  tally() %>% 
+  right_join(select(districts, c("polygon1_id" = "polygon_id"))) %>% 
+  mutate(n = replace_na(n, 0))
+```
+
+```{r}
+nb_links <- function(x) {
+  x %>%
+    group_by(polygon1_id) %>%
+    tally() %>% 
+    right_join(select(districts, c("polygon1_id" = "polygon_id"))) %>% 
+    mutate(n = replace_na(n, 0)) %>% 
+    pull(n)
+}
+```
+
+```{r}
+cols <- RColorBrewer::brewer.pal(9, "Blues")
+
+plot(xs, seq_along(xs), ylim = c(0, 700), type = "n", xlim = xlim,
+     xlab = NA, ylab = "number of districts connected to")
+
+tmp <- colocation %>% 
+  map(nb_links) %>%
+  map_dfc(quantile, 0:10 / 10) %>% 
+  t() %>% 
+  as.data.frame()
+
+xs2 <- xs + 3
+
+for (i in 1:5)
+  polygon(c(xs2, rev(xs2)), c(tmp[[i]], rev(tmp[[12 - i]])), col = cols[i], border = NA)
+
+lines(xs2, tmp[[6]], col = cols[6])
+abline(h = nrow(districts), col = "grey", lty = 2)
+polygon(c(ld, rev(ld)), rep(ys, each = 2), col = adjustcolor("red", .1), border = NA)
+```
 
 ## Rearranging the colocation data into a matrix
 
@@ -901,7 +973,7 @@ template <- districts %>%
   setNames(c("polygon1_id", "polygon2_id"))
 ```
 
-The function that transform the colocation data into a matrix:
+The function that transforms the colocation data into a matrix:
 
 ```{r}
 to_matrix <- function(df, template) {
@@ -1010,3 +1082,32 @@ par(opar)
 box(bty = "o")
 ```
 
+## Exploring the colocation data
+
+### Coverage: comparing facebook population with census population
+
+```{r eval=F}
+colocation$`2020-03-03` %>%
+  select(polygon1_id, fb_population_1) %>% 
+  distinct() %>% 
+  left_join(select(districts, -lon, -lat), c("polygon1_id" = "polygon_id")) %>% 
+  left_join(select(st_drop_geometry(vn2), -area), c("province", "district")) %$%
+  plot(n, log10(fb_population_1))
+```
+
+### Gravity model
+
+One model fairly used in geography is the so-called gravity model that says that
+the connection between any 2 locations $i$ and $j$ is:
+
+$$
+C_{ij} = \theta\frac{P_i^{\tau_1}P_j^{\tau_2}}{d_{ij}^\rho}
+$$
+See for example
+[10.1126/science.1125237](https://science.sciencemag.org/content/312/5772/447.abstract).
+
+*TO DO:* test this model on the facebook data.
+
+### Effective distance
+
+See [10.1126/science.1245200](https://science.sciencemag.org/content/342/6164/1337)
