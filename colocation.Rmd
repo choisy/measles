@@ -1497,8 +1497,42 @@ tmp %>%
   plot(add = TRUE, col = colors)
 ```
 
-It is a little noisy.
+It is a little noisy, so let's take a closer look at the districts that are "clearly" in one group or the other; that is, districts with posterior probabilities that indicate clear membership to one of the linear regression models. 
 
+```{r}
+postProb <- posterior(model) %>%
+  as.data.frame() %>%
+  transmute(model1 = V1, model2 = V2, cluster = clusters(model)) %>%
+  mutate(m1Vm2 = model1/model2, m2Vm1 = model2/model1)
+```
+
+```{r}
+tmpPost <- tmp %>% 
+  transmute(cluster = postProb$cluster, m1Vm2 = postProb$m1Vm2, 
+            m2Vm1 = postProb$m2Vm1)
+```
+
+```{r}
+vn0 %>% 
+  st_geometry() %>% 
+  plot(col = "grey")
+
+tmpPost %>% 
+  filter(cluster == 1) %>%
+  arrange(desc(m1Vm2)) %>%
+  head(50) %>%
+  st_geometry() %>%
+  plot(add = TRUE, col = 3)
+
+tmpPost %>% 
+  filter(cluster == 2) %>%
+  arrange(desc(m2Vm1)) %>%
+  head(50) %>%
+  st_geometry() %>%
+  plot(add = TRUE, col = 2)
+```
+
+The districts with high intercity $R_0$ relative to intracity $R_0$ are clustered around Hanoi and Ho Chi Minh, while the districts with low intercity $R_0$ relative to intracity $R_0$ are clustered in remote regions. 
 
 ### Gravity model
 
