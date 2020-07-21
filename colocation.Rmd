@@ -103,7 +103,7 @@ hist2 <- function(...) hist(..., main = NA)
 Downloading the population density data from [WorldPop](https://www.worldpop.org):
 
 ```{r eval = FALSE}
-setwd("~/Desktop/OUCRU/FacebookData/ColocationMarc")
+setwd("~/Desktop/OUCRU/FacebookData/ColocationMarc") # set to your own desired wd
 download.file("ftp://ftp.worldpop.org.uk/GIS/Population/Individual_countries/VNM/Viet_Nam_100m_Population/VNM_ppp_v2b_2020_UNadj.tif",
               "VNM_ppp_v2b_2020_UNadj.tif")
 ```
@@ -988,7 +988,16 @@ vn2 %<>%
 and this what it looks like now:
 
 ```{r}
-vn2
+head(vn2)
+```
+
+Let's save the GADM/census data to the local environment:
+```{r include = FALSE, eval = FALSE}
+saveRDS(vn2, "GADM_census.rds")
+```
+
+```{r include = FALSE}
+vn2 <- readRDS("GADM_census.rds")
 ```
 
 ## Exploring the colocation data
@@ -1281,258 +1290,6 @@ colocation$`2020-03-03` %>%
   map(log) %$% 
   plot(fb_pop, link)
 ```
-
-## SEIR Metapopulation Contact Model
-The following model uses colocation data to formulate the coupling in a SEIR metapopulation model. The equations that describe the epidynamics in each of the populations is given below:
-$$
-\begin{aligned}
-  \frac{dS_i}{dt} & = - S_i \sum_{k} \beta_{ik} \frac{I_k}{N_k} \\
-  \frac{dE_i}{dt} & = S_i \sum_{k} \beta_{ik} \frac{I_k}{N_k} - \sigma E_i \\
-  \frac{dI_i}{dt} & = \sigma E_i - \gamma I_i \\
-  \frac{dR_i}{dt} & = \gamma I_i \\
-\end{aligned}
-$$
-where $\frac{1}{\sigma} = 7$ days is the latency period and $\frac{1}{\gamma} = 7$ is the recovery period. Note that $N_i = S_i + E_i + I_i + R_i$. We assume that $\beta_{ik}$ which represents the transmission rate from population $k$ to population $i$ is proportional to $C_{ik}$, the colocation probability for population $i$ and population $k$.
-
-The following parameterization is an adaptation of the contact model given in the paper, [Modeling the impact of human mobility and travel restrictions on the potential spread of SARS-CoV-2 in Taiwan](https://www.medrxiv.org/content/10.1101/2020.04.07.20053439v1). 
-
-The $\beta_{ik}$ are defined as follows:
-$$
-\begin{aligned}
-  \beta_{ik} = \gamma R_{0 ik}
-\end{aligned}
-$$
-where 
-$$
-\begin{aligned}
-  R_{0 ik} & = R_{0 \: Hanoi'} \frac{C_{ij}}{C_{Hanoi'-Hanoi'}} \\
-\end{aligned}
-$$
-and $Hanoi'$ is the district in Hà Nội with the highest density. 
-
-Let's calculate the district in Hanoi with the highest density. 
-```{r}
-HanoiDist <- vn2 %>%
-  filter(province == "Hà Nội") %>% 
-  arrange(desc(den_km2)) %>%
-  head(1) %>%
-  pull(district)
-
-HanoiDistID <- vn2 %>%
-  filter(province == "Hà Nội") %>%
-  filter(district == HanoiDist) %>% 
-  pull(polygon_id)
-```
-As such, we will set the $R_0$ of `r HanoiDist` to 18; that is, $R_{0 \: Hanoi'} = 18$. <br>
-
-The following function computes the $R_{0 ik}$ values with the standard reference district with $R_0$ of `standardR0` and district ID of `standardDistID`. 
-```{r}
-compute_R0 <- function(coloc_mat, standardR0, standardDistID) {
-  melt(coloc_mat) %>% 
-    setNames(c("polygon1_id", "polygon2_id", "link_value")) %>%
-    mutate(R0 = standardR0 * link_value / coloc_mat[paste(standardDistID), paste(standardDistID)])
-}
-```
-
-Let's compute the $R_{0 ik}$ with $R_{0 \: Hanoi'} = 18$:
-```{r warning=FALSE}
-R0 <- compute_R0(coloc_mat, 18, HanoiDistID)
-```
-
-### Intracity $R_0$
-
-Let's see the distribution of the intracity $R_0$ values; that is, the distribution of $R_{0 ii}$ values. 
-```{r}
-intracityR0 <- R0 %>%
-  filter(polygon1_id == polygon2_id) %>%
-  rename(intraR0 = R0)
-```
-
-```{r}
-hist2(intracityR0$intraR0, n = 50, xlab = "Intracity R0", ylab = "number of districts", axes = FALSE)
-axis(1, seq(0, 60, 10))
-axis(2)
-```
-
-```{r}
-cb <- RColorBrewer::brewer.pal(9, "YlOrBr")
-color_generator <- colorRampPalette(cb)
-pal <- color_generator(10)
-```
-
-```{r}
-hist2(intracityR0$intraR0, quantile(intracityR0$intraR0, seq(0, 1, le = 11)), col = pal, axes = FALSE,
-      xlab = "Intracity R0", ylab = "density of probability")
-axis(1, seq(0, 60, 10))
-axis(2)
-```
-
-```{r}
-quantile(intracityR0$intraR0, seq(0, 1, le = 11))
-```
-
-Let's map the intracity $R_0$ values for the districts:
-```{r}
-intracityR0sf <- vn2 %>%
-  right_join(select(intracityR0, -polygon2_id), c("polygon_id" = "polygon1_id"))
-```
-
-The following district have intracity $R0$ greater than 10. 
-```{r}
-vn0 %>% 
-  st_geometry() %>% 
-  plot(col = "grey")
-
-intracityR0sf %>%
-  select("intraR0") %>% 
-  filter(intraR0 > 10) %>%
-  plot(add = TRUE, col = "red")
-```
-
-The following districts have intracity $R0$ greater than 20. 
-```{r}
-intracityR0sf %>% 
-  filter(intraR0 > 20) %>%
-  arrange(desc(intraR0)) %>%
-  st_drop_geometry() %>%
-  select(province, district, intraR0)
-```
-
-```{r}
-vn0 %>% 
-  st_geometry() %>% 
-  plot(col = "grey")
-
-intracityR0sf %>% 
-  filter(intraR0 > 20) %>% 
-  select(intraR0) %>% 
-  plot(add = TRUE, col = "red")
-```
-
-It appears that remote regions of Vietnam have relatively higher intracity $R_0$ values. Let's verify this by graphing relationship between population density and intracity $R_0$ values under the assumption that more remote regions will have lower population densities. 
-
-```{r}
-ggplot(intracityR0sf, aes(x = log10(den_km2), y = intraR0)) + geom_point()
-```
-
-Both populations with relatively low population densities and populations with relatively high population densities have high intracity $R_0$ values. Populations with especially low densities have the greatest intracity $R_0$ values. Note that we should see a positive relationship between population density and intracity $R_0$ values. The intracity $R_0$ values need to be adjusted to fix the artifact of how the colocation matrix is constructed. 
-
-### Intercity $R_0$
-Let's consider the intercity R0 values:
-```{r}
-intercityR0 <- R0 %>%
-  filter(polygon1_id != polygon2_id) %>%
-  rename(interR0 = R0)
-
-totalInter <- intercityR0 %>%
-  group_by(polygon1_id) %>%
-  summarize(interR0 = sum(interR0)) %>%
-  arrange(desc(interR0))
-```
-
-Let's map the intracity $R_0$ values for the districts:
-The following districts have intercityR0 values greater than 1:
-```{r}
-intercityR0sf <- vn2 %>%
-  right_join(totalInter, c("polygon_id" = "polygon1_id"))
-```
-
-```{r}
-vn0 %>% 
-  st_geometry() %>% 
-  plot(col = "grey")
-
-intercityR0sf %>%
-  select("interR0") %>% 
-  filter(interR0 > 1) %>%
-  plot(add = TRUE, col = "red")
-```
-
-Let's graph the relationship between population density and intercity $R_0$ values:
-```{r}
-ggplot(intercityR0sf, aes(x = log10(den_km2), y = interR0)) + geom_point()
-```
-
-As we would expect, population centers with higher population densities are better connected with surrounding regions resulting in higher intercity $R_0$ values. Hence, the intercity $R_0$ values under this model are consistent with epidemiological assumptions. 
-
-### Intercity and Intracity $R_0$ values
-Let's graph the relationship between intracity $R_0$ values and intercity $R_0$ values:
-```{r}
-tmp <- intercityR0sf %>%
-  right_join(select(intracityR0, -polygon2_id, -link_value), c("polygon_id" = "polygon1_id"))
-```
-
-```{r}
-ggplot(tmp, aes(x = intraR0, y = interR0)) + geom_point() +
-  geom_abline(slope = 1, intercept = 0)
-```
-
-There are two distinct groups in the plot: one group has larger intercity $R_0$ values relative to intracity $R_0$ values, while the other has larger intracity $R_0$ values relative to intercity $R_0$ values. 
-
-Let's use a linear mixture model to assign each point to a particular linear model:
-
-```{r}
-library(flexmix)
-model <- flexmix(interR0 ~ intraR0, tmp, k = 2)
-summary(model)
-```
-
-```{r}
-plot(tmp$interR0, tmp$intraR0, col = clusters(model), 
-     xlab = "intercity R0", ylab = "intracity R0")
-```
-
-Let's map the clustering observed in the linear mixture model to the districts:
-```{r}
-vn0 %>% 
-  st_geometry() %>% 
-  plot(col = "grey")
-
-colors <- clusters(model)
-colors[colors == 1] = 3
-
-tmp %>% 
-  transmute(cluster = clusters(model)) %>%
-  st_geometry() %>%
-  plot(add = TRUE, col = colors)
-```
-
-It is a little noisy, so let's take a closer look at the districts that are "clearly" in one group or the other; that is, districts with posterior probabilities that indicate clear membership to one of the linear regression models. 
-
-```{r}
-postProb <- posterior(model) %>%
-  as.data.frame() %>%
-  transmute(model1 = V1, model2 = V2, cluster = clusters(model)) %>%
-  mutate(m1Vm2 = model1/model2, m2Vm1 = model2/model1)
-```
-
-```{r}
-tmpPost <- tmp %>% 
-  transmute(cluster = postProb$cluster, m1Vm2 = postProb$m1Vm2, 
-            m2Vm1 = postProb$m2Vm1)
-```
-
-```{r}
-vn0 %>% 
-  st_geometry() %>% 
-  plot(col = "grey")
-
-tmpPost %>% 
-  filter(cluster == 1) %>%
-  arrange(desc(m1Vm2)) %>%
-  head(50) %>%
-  st_geometry() %>%
-  plot(add = TRUE, col = 3)
-
-tmpPost %>% 
-  filter(cluster == 2) %>%
-  arrange(desc(m2Vm1)) %>%
-  head(50) %>%
-  st_geometry() %>%
-  plot(add = TRUE, col = 2)
-```
-
-The districts with high intercity $R_0$ relative to intracity $R_0$ are clustered around Hanoi and Ho Chi Minh, while the districts with low intercity $R_0$ relative to intracity $R_0$ are clustered in remote regions. 
 
 ### Gravity model
 
