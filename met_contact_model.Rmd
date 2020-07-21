@@ -49,7 +49,6 @@ Change them accordingly if you want to run the script locally on your computer.
 
 ## Read in local data sets
 
-
 ```{r}
 dist_polygons <- readRDS(GADM_census_path)
 coloc_mat <- readRDS(coloc_mat_path)
@@ -488,16 +487,48 @@ $$
 
 Let's calculate it for all districts:
 ```{r}
-ROIsf <- R0 %>% 
+ROIdf <- R0 %>% 
   group_by(polygon1_id) %>%
   summarize(ROI = sum(R0)) %>%
   rename(polygon_id = polygon1_id) %>%
   arrange(desc(ROI)) %>%
   mutate(ROI = ROI / head(., 1)$ROI)
+
+ROIsf <- dist_polygons %>%
+  right_join(ROIdf, "polygon_id")
 ```
+
+It look like this:
+```{r}
+ROIsf %>%
+  arrange(desc(ROI)) %>%
+  select(province, district, den_km2, ROI) %>%
+  st_drop_geometry() %>%
+  head(30)
+```
+
+The districts with the highest risk of infection are located in Hanoi and Ho Chi Minh provinces. There are a few districts with very low population densities that have relatively high risks of infection, which are presumably attributable to the fact that they are isolated and do not travel outside the population. 
 
 ```{r}
 hist2(ROIsf$ROI, n = 50, xlab = "Intracity R0", ylab = "number of districts", axes = FALSE)
 axis(1, seq(0, 1, 0.1))
 axis(2)
 ```
+
+Let's map the risk of infection to the districts:
+```{r}
+ROIsf %>%
+  st_geometry() %>%
+  plot(lwd = .1, col = pal[cut(ROIsf$ROI, quantile(ROIsf$ROI, seq(0, 1, le = 11)))], main = NA)
+
+vn0 %>%
+  st_geometry() %>%
+  plot(add = TRUE)
+```
+
+Let's examine the relationship between population density and risk of infection:
+```{r}
+ggplot(ROIsf, aes(x = log10(den_km2), y = ROI)) + geom_point()
+```
+
+Generally, risk of infection increases with population density. We see, however, that some populations with low density have high risks of infection. 
