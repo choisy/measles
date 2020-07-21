@@ -507,7 +507,7 @@ ROIsf %>%
   head(30)
 ```
 
-The districts with the highest risk of infection are located in Hanoi and Ho Chi Minh provinces. There are a few districts with very low population densities that have relatively high risks of infection, which are presumably attributable to the fact that they are isolated and do not travel outside the population. 
+The districts with the highest risk of infection are located in Hanoi and Ho Chi Minh provinces. There are a few districts with very low population densities (Ha Giang Province in Northern Vietnam) that have relatively high risks of infection, which are presumably attributable to the fact that they are isolated and do not travel outside the population leading to very high $C_ii$ values in the colocation matrix. 
 
 ```{r}
 hist2(ROIsf$ROI, n = 50, xlab = "Intracity R0", ylab = "number of districts", axes = FALSE)
@@ -531,4 +531,36 @@ Let's examine the relationship between population density and risk of infection:
 ggplot(ROIsf, aes(x = log10(den_km2), y = ROI)) + geom_point()
 ```
 
-Generally, risk of infection increases with population density. We see, however, that some populations with low density have high risks of infection. 
+Generally, risk of infection increases with population density. We see, however, that some populations with low densities have high risks of infection. 
+
+Let's break down the risk of infection into risk of infection due to intracity transmission and risk of infection due to intercity transmission for each district. 
+```{r}
+tmp <- totalInter %>%
+  right_join(select(intracityR0, polygon1_id, intraR0, n), "polygon1_id") %>%
+  rename(polygon_id = polygon1_id) %>%
+  mutate(interROI = interR0 / (interR0 + intraR0)) %>%
+  filter(interROI != "NaN")
+
+interROI <- dist_polygons %>%
+  right_join(select(tmp, polygon_id, interR0, intraR0, interROI), "polygon_id")
+```
+
+It look like this:
+```{r}
+interROI %>%
+  arrange(desc(interROI)) %>%
+  select(polygon_id, province, district, den_km2, interROI) %>%
+  st_drop_geometry() %>%
+  head(30)
+```
+
+Let's map the percent ROI attributable to intercity transmission: 
+```{r}
+interROI %>%
+  st_geometry() %>%
+  plot(lwd = .1, col = pal[cut(interROI$interROI, quantile(interROI$interROI, seq(0, 1, le = 11)))], main = NA)
+
+vn0 %>%
+  st_geometry() %>%
+  plot(add = TRUE)
+```
