@@ -47,14 +47,6 @@ GADM_country_path <- "~/Desktop/OUCRU/FacebookData/ColocationMarc/gadm36_VNM_0_s
 
 Change them accordingly if you want to run the script locally on your computer.
 
-## Read in local data sets
-
-```{r}
-dist_polygons <- readRDS(GADM_census_path)
-coloc_mat <- readRDS(coloc_mat_path)
-vn0 <- readRDS(GADM_country_path)
-```
-
 ## Packages
 
 The needed packages:
@@ -63,11 +55,21 @@ The needed packages:
 library(sf)
 library(stars)
 library(tidyr)
+library(magrittr)
 library(purrr)
 library(dplyr) # best to load last
 library(reshape2)
 library(data.table)
 library(ggplot2)
+```
+
+## Read in local data sets
+
+```{r}
+dist_polygons <- readRDS(GADM_census_path)
+coloc_mat <- readRDS(coloc_mat_path)
+vn0 <- readRDS(GADM_country_path)
+worldpop <- read_stars("VNM_ppp_v2b_2020_UNadj.tif")
 ```
 
 Redefining the `hist()` function:
@@ -103,7 +105,7 @@ $$
   R_{0 ik} & = R_{0 \: Hanoi'} \frac{C_{ij}}{C_{Hanoi'-Hanoi'}} \\
 \end{aligned}
 $$
-and $Hanoi'$ is the district in Hà Nội with the highest density. 
+and $Hanoi'$ is the district in Hà Nội with the highest density. This assumes that the strength of transmission from district $j$ to district $i$ is dependent on colocation probabilities and independent of the relative population sizes of the interacting regions. 
 
 Let's calculate the district in Hanoi with the highest density. 
 ```{r}
@@ -135,6 +137,7 @@ R0 <- compute_R0(coloc_mat, 18, HanoiDistID)
 ```
 
 ### Intracity $R_0$
+Intracity $R_0$ is defined as $R_ii$. 
 
 Let's see the distribution of the intracity $R_0$ values; that is, the distribution of $R_{0 ii}$ values. 
 ```{r}
@@ -165,6 +168,8 @@ axis(2)
 ```{r}
 quantile(intracityR0$intraR0, seq(0, 1, le = 11))
 ```
+
+Surprisingly, we see that there are several districts with intracity $R_0$ values greater than 20. This is far higher than what you would expect for measles. Let's see what cities in particular have these high intracity $R_0$ values. 
 
 Let's map the intracity $R_0$ values for the districts:
 ```{r}
@@ -213,6 +218,8 @@ ggplot(intracityR0sf, aes(x = log10(den_km2), y = intraR0)) + geom_point()
 Both populations with relatively low population densities and populations with relatively high population densities have high intracity $R_0$ values. Populations with especially low densities have the greatest intracity $R_0$ values. Note that we should see a positive relationship between population density and intracity $R_0$ values. The intracity $R_0$ values need to be adjusted to fix the artifact of how the colocation matrix is constructed. 
 
 ### Intercity $R_0$
+Intercity $R_0$ for location $i$ is defined as $\sum_{j \neq i} R_{0 ij}$. 
+
 Let's consider the intercity R0 values:
 ```{r}
 intercityR0 <- R0 %>%
@@ -224,6 +231,7 @@ totalInter <- intercityR0 %>%
   summarize(interR0 = sum(interR0)) %>%
   arrange(desc(interR0))
 ```
+
 Let's map the intracity $R_0$ values for the districts:
 The following districts have intercityR0 values greater than 1:
 ```{r}
@@ -342,9 +350,9 @@ $$
   R_{0 ik} & = R_{0 \: Hanoi'} \frac{C_{ij} N_j}{C_{Hanoi'-Hanoi'} \cdot N_{Hanoi'}} \\
 \end{aligned}
 $$
-and $Hanoi'$ is the district in Hà Nội with the highest density.
+and $Hanoi'$ is the district in Hà Nội with the highest density. The numerator represents the average number of individuals from population $j$ that colocate with an individual from population $i$ per unit time, whereas the denominator is the average number of colocations among individuals in the densest district in Hanoi per unit time. This formulation scales the colocation probability by the population size of the interacting district. 
 
-
+The following function computes the $R_{0 ik}$ values with the standard reference district with $R_0$ of `standardR0` and district ID of `standardDistID`. 
 ```{r}
 compute_R0 <- function(dist_data, coloc_mat, standardR0, standardDistID) {
   popHanoiDist <- dist_data %>% 
@@ -366,6 +374,8 @@ R0 <- compute_R0(dist_polygons, coloc_mat, 18, HanoiDistID)
 ```
 
 ### Intracity $R_0$
+Intracity $R_0$ is defined as $R_ii$. 
+
 Let's see the distribution of the intracity $R_0$ values; that is, the distribution of $R_{0 ii}$ values. 
 ```{r}
 intracityR0 <- R0 %>%
@@ -396,6 +406,8 @@ axis(2)
 quantile(intracityR0$intraR0, seq(0, 1, le = 11))
 ```
 
+The intracity $R_0$ values are far more reasonable for measles. 
+
 Let's map the intracity $R_0$ values for the districts:
 ```{r}
 intracityR0sf <- dist_polygons %>%
@@ -419,9 +431,10 @@ Let's explore the relationship between population density and intracity $R_0$ va
 ```{r}
 ggplot(intracityR0sf, aes(x = log10(den_km2), y = intraR0)) + geom_point()
 ```
-This is a large improvement from the previous model, but there are still districts with low densities that have high intracity $R_0$ values. 
+This is a large improvement from the previous model, but there are still districts with low densities that have high intracity $R_0$ values. One would assume that remote regions with low densities would have smaller within-district colocation probabilities because people are so sparsely located and rarely interact. This property, however, may be due to the fact that the majority of the population within these small districts reside only a small area of the much larger district; therefore, although the district has a low population density overall, the areas where residents actually reside may be quite dense. This could result in a high within-district colocation probability and consequently a high intracity $R_0$. This hypothesis will be tested below. 
 
 ### Intercity $R_0$
+Intercity $R_0$ for location $i$ is defined as $\sum_{j \neq i} R_{0 ij}$. 
 
 Let's consider the intercity R0 values:
 ```{r}
@@ -460,8 +473,7 @@ Let's graph the relationship between population density and intercity $R_0$ valu
 ggplot(intercityR0sf, aes(x = log10(den_km2), y = interR0)) + geom_point()
 ```
 
-As we would expect, population centers with higher population densities are better connected with surrounding regions resulting in higher intercity $R_0$ values. Hence, the intercity $R_0$ values under this model are consistent with epidemiological assumptions. 
-
+As we would expect, population centers with higher population densities are better connected with surrounding regions resulting in higher intercity $R_0$ values. Hence, the intercity $R_0$ values under this model are consistent with epidemiological assumptions. Implicit in this analysis is the assumption that districts with higher population densities are better connected to surrounding regions. In general, this assumption holds because districts which have high population densities tend to have advanced transport networks that facilitate travel between other districts. 
 
 ### Intercity and Intracity $R_0$ values
 Let's graph the relationship between intracity $R_0$ values and intercity $R_0$ values:
@@ -481,9 +493,10 @@ The grouping that we observed in the first model has largely disappeared. There 
 Let's define the risk of infection for a location $i$ as follows:
 $$
 \begin{aligned}
-  \text{Risk of infection for location i} = \frac{\sum_{j} R_{0 ij}}{\text{max}_l(\sum_j R_{0 ij})}
+  \text{Risk of infection for location i} = \frac{\sum_{j \: includes \: i } R_{0 ij}}{\text{max}_l(\sum_{j \: includes \: l} R_{0 lj})}
 \end{aligned}
 $$
+The sum of intracity $R_0$ and intercity $R_0$ reflects total risk of infection and was standardized to the highest sum of intracity $R_0$ and intercity $R_0$. 
 
 Let's calculate it for all districts:
 ```{r}
@@ -507,7 +520,7 @@ ROIsf %>%
   head(30)
 ```
 
-The districts with the highest risk of infection are located in Hanoi and Ho Chi Minh provinces. There are a few districts with very low population densities (Ha Giang Province in Northern Vietnam) that have relatively high risks of infection, which are presumably attributable to the fact that they are isolated and do not travel outside the population leading to very high $C_ii$ values in the colocation matrix. 
+The districts with the highest risk of infection are located in Hanoi and Ho Chi Minh provinces. There are a few districts with very low population densities (Ha Giang Province in Northern Vietnam) that have relatively high risks of infection, which are presumably attributable to the fact that they are concentrated within a small region of the much large district and do not travel outside the population leading to very high $C_{ii}$ values in the colocation matrix. This is tested below. 
 
 ```{r}
 hist2(ROIsf$ROI, n = 50, xlab = "Intracity R0", ylab = "number of districts", axes = FALSE)
@@ -528,10 +541,11 @@ vn0 %>%
 
 Let's examine the relationship between population density and risk of infection:
 ```{r}
-ggplot(ROIsf, aes(x = log10(den_km2), y = ROI)) + geom_point()
+ggplot(ROIsf, aes(x = log10(den_km2), y = ROI)) + 
+  geom_point() +
+  geom_point(data = filter(ROIsf, province == "Hà Giang"), aes(x= log10(den_km2), y = ROI), color='red')
 ```
-
-Generally, risk of infection increases with population density. We see, however, that some populations with low densities have high risks of infection. 
+Generally, risk of infection increases with population density. We see, however, that some populations with low densities have high risks of infection. In particular, the districts in the Hà Giang province, which have particularly high ROI for the relatively low population densities are highlighted red.
 
 Let's break down the risk of infection into risk of infection due to intracity transmission and risk of infection due to intercity transmission for each district. 
 ```{r}
@@ -559,6 +573,142 @@ Let's map the percent ROI attributable to intercity transmission:
 interROI %>%
   st_geometry() %>%
   plot(lwd = .1, col = pal[cut(interROI$interROI, quantile(interROI$interROI, seq(0, 1, le = 11)))], main = NA)
+
+vn0 %>%
+  st_geometry() %>%
+  plot(add = TRUE)
+```
+
+Many of the districts with high ROI actually have relatively low ROI attributable to intercity transmission. This suggests that such the populations of such districts are isolated and a concentrated within a small region of the much larger district. Therefore, if a infected individual were to be introduced into a remote population with a high ROI (a rare event), the disease transmission within the district will be high because the individuals in the community are strongly connected. This will rarely happen, however, given how weak such a districts intercity interactions are with other populations. 
+
+## Explorations of Hà Giang Province: high ROI and low density 
+The Hà Giang Province has a number of districts with high intracity $R_0$ values in spite of their relatively low population densities; in fact, their population densities place them in the first quartile among all districts in Vietnam. One would assume that remote regions with low densities would have smaller within-district colocation probabilities because people are so sparsely located and rarely interact. The counter-intuitive property displayed by some districts in the Hà Giang Province may be attributable to the fact that the majority of the population within these small districts reside only a small area of the much larger district; therefore, although the district has a low population density overall, the areas where residents actually reside may be quite dense. This could result in a high within-district colocation probability and consequently a high intracity $R_0$.
+
+There are 10 districts in the Hà Giang province, which is identified below:
+```{r}
+plot(st_geometry(vn0), col = "grey")
+
+dist_polygons %>%
+  filter(province == "Hà Giang") %>%
+  st_geometry() %>%
+  plot(add = TRUE, col = "yellow")
+```
+
+In order to characterize how evenly the population is spread in the district, the actual population density of each Bing pixel is compared to the population density of each Bing pixel if the population was perfectly spread out over all the pixels. This is captured by the shaded area in the following graph, where a smaller area corresponds to a more spread out population.
+```{r include = FALSE, warning = FALSE, eval = TRUE}
+dist <- dist_polygons %>% 
+    filter(polygon_id == 834527)
+
+tmp <- worldpop %>%
+  st_crop(dist) %>%
+  st_as_stars() %>%
+  unlist() %>%
+  na.omit() %>%
+  as.vector() %>%
+  sort(decreasing = TRUE)
+
+cumsum <- (tmp / sum(tmp)) %>% cumsum() 
+```
+
+```{r}
+xaxis <- seq(0, 1, length.out = length(cumsum))
+plot(x = xaxis, y = cumsum, type = "l", axes = FALSE,
+     xlab = "cumulative proportion of pixels in the district", 
+     ylab = "cumulative proportion of the district population")
+abline(0, 1)
+polygon(x = c(xaxis, xaxis), y = c(cumsum, xaxis), col = adjustcolor("green", .2))
+axis(1, seq(0, 1, by = 0.1))
+axis(2, seq(0, 1, by = 0.1))
+```
+
+The following function computes the area-under-curve (AUC) statistic for the district with `polygon_ID` according to the `worldpop` data set. 
+```{r warning = FALSE}
+compute_AUC <- function(polygon_ID, polygons = dist_polygons, rstr = worldpop) {
+  dist <- polygons %>% 
+    filter(polygon_id == polygon_ID)
+  
+  tmp <- worldpop %>%
+    st_crop(dist) %>%
+    st_as_stars() %>%
+    unlist() %>%
+    na.omit() %>%
+    as.vector() %>%
+    sort(decreasing = TRUE)
+  
+  cumsum <- (tmp / sum(tmp)) %>% cumsum() 
+  (cumsum / length(cumsum)) %>% sum() - 0.5
+}
+```
+
+Let's compute the area-under-curve (AUC) statistic for each of the districts:
+```{r eval = FALSE}
+dist_AUCs <- unlist(purrr::map(pull(dist_polygons, polygon_id), compute_AUC)) %>%
+  data.frame(polygon_id = pull(dist_polygons, polygon_id), AUC = .)
+```
+
+```{r eval = FALSE, include = FALSE}
+saveRDS(dist_AUCs, "dist_AUC.RDS")
+```
+
+```{r include = FALSE}
+dist_AUCs <- readRDS("dist_AUC.RDS")
+```
+
+Let's check whether there are any districts with no population according to [WorldPop](https://www.worldpop.org):
+```{r}
+no_pop <- dist_AUCs %>%
+  filter(AUC == -0.5) %>%
+  pull(polygon_id)
+
+dist_polygons %>%
+  filter(polygon_id %in% no_pop) %>%
+  select(polygon_id, province, district) %>%
+  st_drop_geometry()
+```
+
+Let's map these districts without population data:
+```{r warning = FALSE}
+vn0 %>% 
+  st_geometry() %>% 
+  plot(col = "grey")
+
+dist_polygons %>%
+  filter(polygon_id %in% no_pop) %>% 
+  st_centroid() %>%
+  st_geometry() %>%
+  plot(pch = 3, col = 'red', add = TRUE)
+```
+All the districts without population data are islands off the coast of Vietnam. 
+
+Let's remove these data points from the AUC data set.
+```{r}
+dist_AUCs %<>% 
+  filter(AUC != -0.5)
+```
+
+Let's examine the distribution of the AUC statistics:
+```{r}
+hist2(dist_AUCs$AUC, n = 50, axes = FALSE, 
+      xlab = "area-under-curve (AUC)", ylab = "number of districts")
+axis(1, seq(0, 0.4, 0.05))
+axis(2, seq(0, 50, 10))
+```
+
+```{r}
+tmp <- ROIsf %>%
+  right_join(dist_AUCs, "polygon_id")
+
+ggplot(tmp, aes(x = log10(den_km2), y = ROI)) + geom_point(aes(color = AUC))
+```
+
+Those districts with high ROI (above 0.25) and low density (below 300 / km2) do not necessarily have low AUC values. As such, the hypothesis that this property is attributable to the fact that the the majority of the population is concentrated in a small area relative to the district as whole may not hold. An alternative explanation may need to be sought. 
+
+Let's map the AUC distribution:
+```{r}
+dist_polygons %>%
+  right_join(dist_AUCs, "polygon_id") %>%
+  st_geometry() %>%
+  plot(lwd = .1, col = pal[cut(dist_AUCs$AUC, quantile(dist_AUCs$AUC, seq(0, 1, le = 11)))], main = NA)
 
 vn0 %>%
   st_geometry() %>%
