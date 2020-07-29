@@ -43,6 +43,8 @@ Here we use the following links to data.
 GADM_census_path <- "~/Desktop/OUCRU/FacebookData/ColocationMarc/GADM_census.rds"
 coloc_mat_path <- "~/Desktop/OUCRU/FacebookData/ColocationMarc/coloc_mat.rds"
 GADM_country_path <- "~/Desktop/OUCRU/FacebookData/ColocationMarc/gadm36_VNM_0_sf.rds"
+colocation_path <- "~/Desktop/OUCRU/FacebookData/ColocationMarc/colocation2.rds"
+coloc_line_path <- "~/Desktop/OUCRU/Project/meta_contact_model/dist_linestrings.RDS"
 ```
 
 Change them accordingly if you want to run the script locally on your computer.
@@ -61,15 +63,18 @@ library(dplyr) # best to load last
 library(reshape2)
 library(data.table)
 library(ggplot2)
+library(lubridate)
 ```
 
 ## Read in local data sets
 
 ```{r}
+setwd("~/Desktop/OUCRU/FacebookData/ColocationMarc")
 dist_polygons <- readRDS(GADM_census_path)
 coloc_mat <- readRDS(coloc_mat_path)
 vn0 <- readRDS(GADM_country_path)
 worldpop <- read_stars("VNM_ppp_v2b_2020_UNadj.tif")
+colocation <- readRDS(colocation_path)
 ```
 
 Redefining the `hist()` function:
@@ -82,27 +87,27 @@ hist2 <- function(...) hist(..., main = NA)
 The following model uses colocation data to formulate the coupling in a SEIR metapopulation model. The equations that describe the epidynamics in each of the populations is given below:
 $$
 \begin{aligned}
-  \frac{dS_i}{dt} & = - S_i \sum_{k} \beta_{ik} \frac{I_k}{N_k} \\
-  \frac{dE_i}{dt} & = S_i \sum_{k} \beta_{ik} \frac{I_k}{N_k} - \sigma E_i \\
+  \frac{dS_i}{dt} & = - S_i \sum_{j} \beta_{ij} \frac{I_j}{N_j} \\
+  \frac{dE_i}{dt} & = S_i \sum_{j} \beta_{ij} \frac{I_j}{N_j} - \sigma E_i \\
   \frac{dI_i}{dt} & = \sigma E_i - \gamma I_i \\
   \frac{dR_i}{dt} & = \gamma I_i \\
 \end{aligned}
 $$
-where $\frac{1}{\sigma} = 7$ days is the latency period and $\frac{1}{\gamma} = 7$ is the recovery period. Note that $N_i = S_i + E_i + I_i + R_i$. We assume that $\beta_{ik}$ which represents the transmission rate from population $k$ to population $i$ is proportional to $C_{ik}$, the colocation probability for population $i$ and population $k$.
+where $\frac{1}{\sigma} = 7$ days is the latency period and $\frac{1}{\gamma} = 7$ is the recovery period. Note that $N_i = S_i + E_i + I_i + R_i$. We assume that $\beta_{ij}$ which represents the transmission rate from population $j$ to population $i$ is proportional to $C_{ij}$, the colocation probability for population $i$ and population $j$.
 
 ## Parameterization Method 1
 The following parameterization is an adaptation of the contact model given in the paper, [Modeling the impact of human mobility and travel restrictions on the potential spread of SARS-CoV-2 in Taiwan](https://www.medrxiv.org/content/10.1101/2020.04.07.20053439v1). 
 
-The $\beta_{ik}$ are defined as follows:
+The $\beta_{ij}$ are defined as follows:
 $$
 \begin{aligned}
-  \beta_{ik} = \gamma R_{0 ik}
+  \beta_{ij} = \gamma R_{0 ij}
 \end{aligned}
 $$
 where 
 $$
 \begin{aligned}
-  R_{0 ik} & = R_{0 \: Hanoi'} \frac{C_{ij}}{C_{Hanoi'-Hanoi'}} \\
+  R_{0 ij} & = R_{0 \: Hanoi'} \frac{C_{ij}}{C_{Hanoi'-Hanoi'}} \\
 \end{aligned}
 $$
 and $Hanoi'$ is the district in Hà Nội with the highest density. This assumes that the strength of transmission from district $j$ to district $i$ is dependent on colocation probabilities and independent of the relative population sizes of the interacting regions. 
@@ -122,7 +127,7 @@ HanoiDistID <- dist_polygons %>%
 ```
 As such, we will set the $R_0$ of `r HanoiDist` to 18; that is, $R_{0 \: Hanoi'} = 18$. <br>
 
-The following function computes the $R_{0 ik}$ values with the standard reference district with $R_0$ of `standardR0` and district ID of `standardDistID`. 
+The following function computes the $R_{0 ij}$ values with the standard reference district with $R_0$ of `standardR0` and district ID of `standardDistID`. 
 ```{r}
 compute_R0 <- function(coloc_mat, standardR0, standardDistID) {
   melt(coloc_mat) %>% 
@@ -131,7 +136,7 @@ compute_R0 <- function(coloc_mat, standardR0, standardDistID) {
 }
 ```
 
-Let's compute the $R_{0 ik}$ with $R_{0 \: Hanoi'} = 18$:
+Let's compute the $R_{0 ij}$ with $R_{0 \: Hanoi'} = 18$:
 ```{r warning=FALSE}
 R0 <- compute_R0(coloc_mat, 18, HanoiDistID)
 ```
@@ -341,18 +346,18 @@ The districts with high intercity $R_0$ relative to intracity $R_0$ are clustere
 The $\beta_{ik}$ are defined as follows:
 $$
 \begin{aligned}
-  \beta_{ik} = \gamma R_{0 ik}
+  \beta_{ij} = \gamma R_{0 ij}
 \end{aligned}
 $$
 where 
 $$
 \begin{aligned}
-  R_{0 ik} & = R_{0 \: Hanoi'} \frac{C_{ij} N_j}{C_{Hanoi'-Hanoi'} \cdot N_{Hanoi'}} \\
+  R_{0 ij} & = R_{0 \: Hanoi'} \frac{C_{ij} N_j}{C_{Hanoi'-Hanoi'} \cdot N_{Hanoi'}} \\
 \end{aligned}
 $$
 and $Hanoi'$ is the district in Hà Nội with the highest density. The numerator represents the average number of individuals from population $j$ that colocate with an individual from population $i$ per unit time, whereas the denominator is the average number of colocations among individuals in the densest district in Hanoi per unit time. This formulation scales the colocation probability by the population size of the interacting district. 
 
-The following function computes the $R_{0 ik}$ values with the standard reference district with $R_0$ of `standardR0` and district ID of `standardDistID`. 
+The following function computes the $R_{0 ij}$ values with the standard reference district with $R_0$ of `standardR0` and district ID of `standardDistID`. 
 ```{r}
 compute_R0 <- function(dist_data, coloc_mat, standardR0, standardDistID) {
   popHanoiDist <- dist_data %>% 
@@ -368,7 +373,7 @@ compute_R0 <- function(dist_data, coloc_mat, standardR0, standardDistID) {
 }
 ```
 
-Let's compute the $R_{0 ik}$ with $R_{0 \: Hanoi'} = 18$:
+Let's compute the $R_{0 ij}$ with $R_{0 \: Hanoi'} = 18$:
 ```{r warning=FALSE}
 R0 <- compute_R0(dist_polygons, coloc_mat, 18, HanoiDistID)
 ```
@@ -437,7 +442,7 @@ This is a large improvement from the previous model, but there are still distric
 Intercity $R_0$ for location $i$ is defined as $\sum_{j \neq i} R_{0 ij}$. 
 
 Let's consider the intercity R0 values:
-```{r}
+```{r warning = FALSE}
 intercityR0 <- R0 %>%
   filter(polygon1_id != polygon2_id) %>%
   rename(interR0 = R0)
@@ -582,7 +587,7 @@ vn0 %>%
 Many of the districts with high ROI actually have relatively low ROI attributable to intercity transmission. This suggests that such the populations of such districts are isolated and a concentrated within a small region of the much larger district. Therefore, if a infected individual were to be introduced into a remote population with a high ROI (a rare event), the disease transmission within the district will be high because the individuals in the community are strongly connected. This will rarely happen, however, given how weak such a districts intercity interactions are with other populations. 
 
 ## Explorations of Hà Giang Province: high ROI and low density 
-The Hà Giang Province has a number of districts with high intracity $R_0$ values in spite of their relatively low population densities; in fact, their population densities place them in the first quartile among all districts in Vietnam. One would assume that remote regions with low densities would have smaller within-district colocation probabilities because people are so sparsely located and rarely interact. The counter-intuitive property displayed by some districts in the Hà Giang Province may be attributable to the fact that the majority of the population within these small districts reside only a small area of the much larger district; therefore, although the district has a low population density overall, the areas where residents actually reside may be quite dense. This could result in a high within-district colocation probability and consequently a high intracity $R_0$.
+The Hà Giang Province has a number of districts with high intracity $R_0$ values in spite of their relatively low population densities; in fact, their population densities place them in the first quartile among all districts in Vietnam. One would assume that remote regions with low densities would have smaller within-district colocation probabilities because people are so sparsely located and rarely interact. The counter-intuitive property displayed by some districts in the Hà Giang Province may be attributable to the fact that the majority of the population within these districts reside only a small area of the much larger district; therefore, although the district has a low population density overall, the areas where residents actually reside may be quite dense. This could result in a high within-district colocation probability and consequently a high intracity $R_0$.
 
 There are 10 districts in the Hà Giang province, which is identified below:
 ```{r}
@@ -594,7 +599,9 @@ dist_polygons %>%
   plot(add = TRUE, col = "yellow")
 ```
 
-In order to characterize how evenly the population is spread in the district, the actual population density of each Bing pixel is compared to the population density of each Bing pixel if the population was perfectly spread out over all the pixels. This is captured by the shaded area in the following graph, where a smaller area corresponds to a more spread out population.
+### AUC Explorations
+In order to characterize how evenly the population is spread in the district, the actual population density of each Bing pixel is compared to the population density of each Bing pixel if the population was perfectly spread out over all the pixels in the district. This is captured by the shaded area in the following graph, where a smaller area corresponds to a more spread out population.
+
 ```{r include = FALSE, warning = FALSE, eval = TRUE}
 dist <- dist_polygons %>% 
     filter(polygon_id == 834527)
@@ -610,7 +617,7 @@ tmp <- worldpop %>%
 cumsum <- (tmp / sum(tmp)) %>% cumsum() 
 ```
 
-```{r}
+```{r echo = FALSE}
 xaxis <- seq(0, 1, length.out = length(cumsum))
 plot(x = xaxis, y = cumsum, type = "l", axes = FALSE,
      xlab = "cumulative proportion of pixels in the district", 
@@ -709,6 +716,581 @@ dist_polygons %>%
   right_join(dist_AUCs, "polygon_id") %>%
   st_geometry() %>%
   plot(lwd = .1, col = pal[cut(dist_AUCs$AUC, quantile(dist_AUCs$AUC, seq(0, 1, le = 11)))], main = NA)
+
+vn0 %>%
+  st_geometry() %>%
+  plot(add = TRUE)
+```
+The darker colored districts have higher AUC values; that is, districts whose populations are less evenly spread out will be colored a darker. 
+
+
+### Facebook Population vs. Census Population Exploration
+In the above model, the census population is used rather than the facebook population even though the colocation probabilities are based on calculations using the facebook population. As such, the artifacts in the data may be attributable to the use of the census population which may be inconsistent with the facebook population. 
+
+Let's compare the facebook population data with the census population data. 
+The following function combines the facebook data with the GADM / census data for each week:
+```{r}
+dist_fb_populations <- function(x) {
+  x %>%
+    select(polygon1_id, fb_population_1) %>% 
+    distinct() %>% 
+    right_join(select(st_drop_geometry(dist_polygons), -area_km2, -den_km2), c("polygon1_id" = "polygon_id"))
+}
+```
+
+Let's compute it:
+```{r}
+tmp <- map(colocation, dist_fb_populations)
+```
+
+Let's consider the change in facebook population for each district over time. Note that each black line represents the facebook population of a district over time.
+```{r}
+xs <- ymd(names(colocation)) - 6
+plot(xs, seq_along(xs), ylim = c(0, 5), type = "n")
+
+tmp %>% 
+  map_dfc(pull, fb_population_1) %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  map(log10) %>% 
+  walk(lines, x = xs, col = adjustcolor("black", .25))
+```
+The facebook population of each district does not seem to change as a function of time.
+
+And the distribution accross district looks like this:
+```{r}
+tmp %>% 
+  map(mutate, prop = fb_population_1 / n) %>% 
+  first() %>%
+  pull(prop) %>%
+  hist2(50, xlab = "facebook coverage", ylab = "number of districts")
+```
+
+Let's look at the facebook coverage as a function of the population size for the first week of the colocation data:
+```{r}
+fb_pop <- colocation$`2020-03-03` %>%
+  select(polygon1_id, fb_population_1) %>% 
+  distinct() %>% 
+  right_join(select(st_drop_geometry(dist_polygons), -area_km2, -den_km2), c("polygon1_id" = "polygon_id"))
+ 
+model <-  lm(log10(fb_population_1) ~ log10(n), fb_pop)
+summary(model)
+
+fb_pop %>%
+  mutate(color = ifelse(province %in% c("Hà Giang"), "red", "blue")) %>%
+  with(plot(log10(n), log10(fb_population_1), col = color, axes = FALSE,
+               ylim = c(1, 4.5), xlim = c(3.8, 6),
+               xlab = "district population", ylab = "facebook population"))
+axis(1, 4:6, format(10000 * c(1, 10, 100), big.mark = ",", scientific = FALSE, trim = TRUE))
+axis(2, 1:4, format(10 * c(1, 10, 100, 1000), big.mark = ",", scientific = FALSE, trim = TRUE))
+```
+Meaning that the facebook coverage increases with population size. Note that the points corresponding to the Hà Giang province are highlighted red. 
+
+Let's explore the relationship between the residuals of the above linear regression with the ROI/density plot derived from the above metapopulation model:
+```{r}
+no_data_dist <- fb_pop[is.na(fb_pop$fb_population_1), ]$polygon1_id
+`%notin%` <- Negate(`%in%`)
+tmp <- fb_pop %>% 
+  filter(polygon1_id %notin% no_data_dist) %>%
+  mutate(residual = model$residuals)
+```
+
+The distribution of the residual values is given by:
+```{r}
+tmp %>% 
+  pull(residual) %>%
+  hist2(50, xlab = "residual", ylab = "number of districts")
+```
+
+```{r}
+ROIsf %>%
+  right_join(select(tmp, polygon1_id, residual), c("polygon_id" = "polygon1_id")) %>%
+  ggplot(aes(x = log10(den_km2), y = ROI)) + geom_point(aes(color = residual)) +
+  scale_color_continuous(low="yellow", high="blue")
+```
+The darker points represent districts with a higher, more positive residual, whereas the lighter points represent districts with a lower, more negative residual. A higher residual means that the facebook population is greater than what would be predicted from the census population, whereas a lower residual means that the facebook population is smaller than what would be predicted from the census population. We see that districts with low density but high ROI are generally characterized by more negative residuals. This is somewhat expected because a smaller facebook population relative to the census population means that a small fraction of individuals largely determine the colocation probability. If this small fraction of individuals are disproportionately connected relative to the district population as a whole, multiplying the colocation probability by the entire district population as given by the census data would result in a larger than expected ROI relative to population density. 
+
+## Connectivity Web
+Connecitivity web of colocation probabilities among districts.
+
+Let's create an sf object that contains linestrings between all possible pairs of districts in Vietnam:
+```{r warning = FALSE}
+all_links <- melt(coloc_mat) %>% 
+  setNames(c("polygon1_id", "polygon2_id", "link_value")) %>%
+  filter(polygon1_id != polygon2_id) %>%
+  as.data.frame() %>%
+  right_join(select(st_centroid(dist_polygons), polygon_id, geometry), c("polygon1_id" = "polygon_id")) %>%
+  rename(geometry1 = geometry) %>%
+  right_join(select(st_centroid(dist_polygons), polygon_id, geometry), c("polygon2_id" = "polygon_id")) %>%
+  rename(geometry2 = geometry)
+```
+
+```{r eval = FALSE}
+dist_linestrings <- st_sfc(mapply(function(a,b){st_cast(st_union(a,b),"LINESTRING")}, all_links$geometry1, all_links$geometry2, SIMPLIFY=FALSE)) %>%
+  as.data.frame() %>%
+  mutate(link_value = all_links$link_value) %>%
+  st_as_sf()
+```
+
+```{r eval = FALSE, include = FALSE}
+saveRDS(dist_linestrings, file = "dist_linestrings.RDS")
+```
+
+```{r eval = TRUE}
+dist_linestrings <- readRDS(coloc_line_path)
+```
+
+Let's map these connections as a web:
+```{r include = FALSE}
+cb <- RColorBrewer::brewer.pal(9, "BuPu")
+color_generator <- colorRampPalette(cb)
+pal <- color_generator(10)
+```
+
+```{r}
+vn0 %>% 
+  st_geometry() %>% 
+  plot(col = "grey")
+
+dist_linestrings %>%
+  plot(lwd = 0.05, col = pal[cut(all_links$link_value, quantile(all_links$link_value, seq(0, 1, le = 11)))], add = TRUE)
+```
+The darker the link color, the stronger the link. 
+
+As a reference, the distribution of the link values between districts is given below:
+```{r}
+hist2(log2(all_links$link_value), n = 50, 
+      xlab = "log2(link value)", ylab = "number of districts")
+```
+
+Let's consider only the strongest links:
+```{r}
+vn0 %>% 
+  st_geometry() %>% 
+  plot(col = "grey")
+
+dist_linestrings %>%
+  arrange(link_value) %>%
+  tail(30000) %>%
+  plot(lwd = 0.15, col = pal[cut(.$link_value, quantile(.$link_value, seq(0, 1, le = 11)))], add = TRUE)
+```
+The darker the link color, the stronger the link. Note the clustering of dark regions. 
+
+## Parameterization Method 2: Facebook population
+Let's see whether the artifact disappears when we use facebook population data rather than census population data:
+
+Let's check whether there are any districts without facebook population data:
+```{r}
+fb_pop[is.na(fb_pop$fb_population_1), ]
+no_data_dist <- fb_pop[is.na(fb_pop$fb_population_1), ]$polygon1_id
+```
+
+Let's map these points: 
+```{r warning = FALSE}
+vn0 %>% 
+  st_geometry() %>% 
+  plot(col = "grey")
+
+dist_polygons %>%
+  filter(polygon_id %in% no_data_dist) %>% 
+  st_centroid() %>%
+  st_geometry() %>%
+  plot(pch = 3, col = 'red', add = TRUE)
+```
+
+Let's estimate the facebook population of these districts based on the linear regression given above:
+```{r}
+data <- data.frame(n = fb_pop[is.na(fb_pop$fb_population_1), ]$n)
+fb_pop[is.na(fb_pop$fb_population_1), ]$fb_population_1 <- 10^predict(model, newdata = data)
+```
+
+Let's verify whether these estimates make sense:
+```{r}
+fb_pop %>%
+  mutate(color = ifelse(polygon1_id %in% no_data_dist, "red", "blue")) %>%
+  with(plot(log10(n), log10(fb_population_1), col = color, axes = FALSE,
+               ylim = c(1, 4.5), xlim = c(3.8, 6),
+               xlab = "district population", ylab = "facebook population"))
+axis(1, 4:6, format(10000 * c(1, 10, 100), big.mark = ",", scientific = FALSE, trim = TRUE))
+axis(2, 1:4, format(10 * c(1, 10, 100, 1000), big.mark = ",", scientific = FALSE, trim = TRUE))
+```
+The estimated points (colored red) are consistent with the actual population data. 
+
+
+The following function computes the $R_0$ under the facebook population adjusted model:
+```{r}
+compute_R0 <- function(dist_data, coloc_mat, standardR0, standardDistID) {
+  popHanoiDist <- dist_data %>% 
+    filter(polygon1_id == HanoiDistID) %>% 
+    pull(fb_population_1)
+  
+  coloc_mat <- reshape2::melt(coloc_mat) %>% 
+    setNames(c("polygon1_id", "polygon2_id", "link_value")) %>%
+    dplyr::right_join(select(as.data.frame(dist_data), polygon1_id, fb_population_1), 
+                      c("polygon2_id" = "polygon1_id")) %>%
+    dplyr::mutate(R0 = standardR0 * link_value * fb_population_1 / 
+             (coloc_mat[paste(standardDistID), paste(standardDistID)] * popHanoiDist))
+}
+```
+
+Let's compute the $R_{0 ij}$ with $R_{0 \: Hanoi'} = 18$:
+```{r warning=FALSE}
+R0 <- compute_R0(fb_pop, coloc_mat, 18, HanoiDistID)
+```
+
+### Intracity $R_0$
+Intracity $R_0$ is defined as $R_ii$. 
+
+Let's see the distribution of the intracity $R_0$ values; that is, the distribution of $R_{0 ii}$ values. 
+```{r}
+intracityR0 <- R0 %>%
+  filter(polygon1_id == polygon2_id) %>%
+  rename(intraR0 = R0)
+```
+
+```{r}
+hist2(intracityR0$intraR0, n = 50, xlab = "Intracity R0", ylab = "number of districts", axes = FALSE)
+axis(1, seq(0, 30, 2))
+axis(2)
+```
+
+```{r}
+cb <- RColorBrewer::brewer.pal(9, "YlOrBr")
+color_generator <- colorRampPalette(cb)
+pal <- color_generator(10)
+```
+
+```{r}
+hist2(intracityR0$intraR0, quantile(intracityR0$intraR0, seq(0, 1, le = 11)), col = pal, axes = FALSE,
+      xlab = "Intracity R0", ylab = "density of probability")
+axis(1, seq(0, 30, 2))
+axis(2)
+```
+
+```{r}
+quantile(intracityR0$intraR0, seq(0, 1, le = 11))
+```
+
+Let's map the intracity $R_0$ values for the districts:
+```{r}
+intracityR0sf <- dist_polygons %>%
+  right_join(select(intracityR0, -polygon2_id, -fb_population_1), c("polygon_id" = "polygon1_id"))
+```
+
+The following district have intracity $R0$ greater than 10.
+```{r}
+vn0 %>% 
+  st_geometry() %>% 
+  plot(col = "grey")
+
+intracityR0sf %>%
+  select("intraR0") %>% 
+  filter(intraR0 > 10) %>%
+  plot(add = TRUE, col = "red")
+```
+We see that there are two clusters: one in Hanoi Province and one in Ho Chi Minh Province. This is a significant improvement to the previous model, which considered census population data. 
+
+Let's explore the relationship between population density and intracity $R_0$ values under the assumption that more remote regions will have lower population densities. 
+```{r}
+ggplot(intracityR0sf, aes(x = log10(den_km2), y = intraR0)) + geom_point()
+```
+There are no longer districts with low densities that have high intracity R0 values as observed in previous formulations of the model. 
+
+### Intercity $R_0$
+Intercity $R_0$ for location $i$ is defined as $\sum_{j \neq i} R_{0 ij}$. 
+
+Let's consider the intercity R0 values:
+```{r warning = FALSE}
+intercityR0 <- R0 %>%
+  filter(polygon1_id != polygon2_id) %>%
+  rename(interR0 = R0)
+
+totalInter <- intercityR0 %>%
+  group_by(polygon1_id) %>%
+  summarize(interR0 = sum(interR0)) %>%
+  arrange(desc(interR0))
+```
+
+Let's see the distribution of the intracity $R_0$ values; that is, the distribution of $R_{0 ii}$ values. 
+```{r}
+hist2(totalInter$interR0, n = 50, xlab = "Intercity R0", ylab = "number of districts", axes = FALSE)
+axis(1, seq(0, 30, 2))
+axis(2)
+```
+
+Let's map the intracity $R_0$ values for the districts:
+The following districts have intercityR0 values greater than 1:
+```{r}
+intercityR0sf <- dist_polygons %>%
+  right_join(totalInter, c("polygon_id" = "polygon1_id"))
+```
+
+```{r}
+vn0 %>% 
+  st_geometry() %>% 
+  plot(col = "grey")
+
+intercityR0sf %>%
+  select("interR0") %>% 
+  filter(interR0 > 1) %>%
+  plot(add = TRUE, col = "yellow")
+```
+The districts with high intercity $R_0$ values are clustered in high density/highly connected regions including Hanoi and Ho Chi Minh, which is what we would expect. 
+
+Let's graph the relationship between population density and intercity $R_0$ values:
+```{r}
+ggplot(intercityR0sf, aes(x = log10(den_km2), y = interR0)) + geom_point()
+```
+As we would expect, population centers with higher population densities are better connected with surrounding regions resulting in higher intercity $R_0$ values. Hence, the intercity $R_0$ values under this model are consistent with epidemiological assumptions.
+
+### Intercity and Intracity $R_0$ values
+Let's graph the relationship between intracity $R_0$ values and intercity $R_0$ values:
+```{r}
+tmp <- intercityR0sf %>%
+  right_join(select(intracityR0, -polygon2_id, -link_value), c("polygon_id" = "polygon1_id"))
+```
+
+```{r}
+ggplot(tmp, aes(x = intraR0, y = interR0)) + geom_point() +
+  geom_abline(slope = 1, intercept = 0)
+```
+
+The grouping that we observed in the first and second model has largely disappeared. As we would expect, the intracity $R_0$ values are weakly proportional to the intercity $R_0$ values. 
+
+### Risk of Infection
+Let's calculate it for all districts:
+```{r}
+ROIdf <- R0 %>% 
+  group_by(polygon1_id) %>%
+  summarize(ROI = sum(R0)) %>%
+  rename(polygon_id = polygon1_id) %>%
+  arrange(desc(ROI)) %>%
+  mutate(ROI = ROI / head(., 1)$ROI)
+
+ROIsf <- dist_polygons %>%
+  right_join(ROIdf, "polygon_id")
+```
+
+It look like this:
+```{r}
+ROIsf %>%
+  arrange(desc(ROI)) %>%
+  select(province, district, den_km2, ROI) %>%
+  st_drop_geometry() %>%
+  head(30)
+```
+
+The districts with the highest risk of infection are located in Hanoi and Ho Chi Minh provinces. There are a few districts with very low population densities (Ha Giang Province in Northern Vietnam) that have relatively high risks of infection, which are presumably attributable to the fact that they are concentrated within a small region of the much large district and do not travel outside the population leading to very high $C_{ii}$ values in the colocation matrix. This is tested below. 
+
+```{r}
+hist2(ROIsf$ROI, n = 50, xlab = "Intracity R0", ylab = "number of districts", axes = FALSE)
+axis(1, seq(0, 1, 0.1))
+axis(2)
+```
+
+Let's map the risk of infection to the districts:
+```{r}
+ROIsf %>%
+  st_geometry() %>%
+  plot(lwd = .1, col = pal[cut(ROIsf$ROI, quantile(ROIsf$ROI, seq(0, 1, le = 11)))], main = NA)
+
+vn0 %>%
+  st_geometry() %>%
+  plot(add = TRUE)
+```
+
+Let's examine the relationship between population density and risk of infection:
+```{r}
+ggplot(ROIsf, aes(x = log10(den_km2), y = ROI)) + 
+  geom_point() +
+  geom_point(data = filter(ROIsf, province == "Hà Giang"), aes(x= log10(den_km2), y = ROI), color='red')
+```
+Generally, risk of infection increases with population density. Note that the districts in the Hà Giang province no longer have have particularly high ROI for their relatively low population densities as highlighted in red.
+
+## From Districts to Provinces
+Let's aggregate the colocation data from district-level to province-level:
+$$
+\begin{aligned}
+  R_{0 ij} = R_{0 \text{ Hồ Chí Minh}} \frac{\sqrt{\sum_{k \in P_i} \sum_{l \in P_j} C_{kl} N_l}}{\sqrt{\sum_{k \in P_{HCM}} \sum_{l \in P_{HCM}} C_{kl} N_l}}
+\end{aligned}
+$$
+where $R_{0 \text{ Hồ Chí Minh}}$ is the reference $R_0$ assigned a value of 18 and $P_i$ is the set of districts in province $i$. The numerator is the square root of the average number of individuals from province $j$ that colocate with an individual from province $i$ per unit time, whereas the denominator is the square root of the average number of colocations among individuals in Hồ Chí Minh. 
+
+Let's compute the $R_{0 ij}$ values with the standard reference province of Hồ Chí Minh assigned an $R_0$ of 18. 
+```{r warning = FALSE}
+prov_coloc <- reshape2::melt(coloc_mat) %>%
+  setNames(c("polygon1_id", "polygon2_id", "link_value")) %>%
+  dplyr::right_join(select(fb_pop, polygon1_id, province)) %>%
+  rename(province_1 = province) %>%
+  dplyr::right_join(select(fb_pop, polygon1_id, province, fb_population_1),  c("polygon2_id" = "polygon1_id")) %>%
+  rename(province_2 = province, fb_population_2 = fb_population_1) %>%
+  mutate(coloc_num = link_value * fb_population_2) %>%
+  group_by(province_1, province_2) %>%
+  summarise(coloc_value = sum(coloc_num))
+```
+
+```{r}
+ref_prov <- prov_coloc %>%
+  arrange(desc(coloc_value)) %>%
+  head(1) %>%
+  pull(coloc_value)
+```
+
+```{r}
+prov_coloc %<>% mutate(R0 = 18 * sqrt(coloc_value) / sqrt(ref_prov))
+```
+
+The following code summarizes the province-level population and geographical data. 
+```{r warning = FALSE}
+prov_polygons <- dist_polygons %>%
+  group_by(province) %>%
+  summarise(total_area_km2 = sum(area_km2), total_pop = sum(n), geom = st_union(geometry)) %>%
+  mutate(total_den_km2 = total_pop / total_area_km2) %>%
+  select(province, total_area_km2, total_pop, total_den_km2, geom)
+```
+
+### Intracity $R_0$
+Intracity $R_0$ is defined as $R_{0 ii}$. 
+
+Let's see the distribution of the intracity $R_0$ values; that is, the distribution of $R_{0 ii}$ values. 
+```{r}
+intracityR0 <- prov_coloc %>%
+  filter(province_1 == province_2) %>%
+  rename(intraR0 = R0) %>%
+  select(province_1, intraR0) %>%
+  rename(province = province_1)
+```
+
+```{r}
+hist2(intracityR0$intraR0, n = 50, xlab = "Intracity R0", ylab = "number of districts", axes = FALSE)
+axis(1, seq(0, 30, 2))
+axis(2)
+```
+
+The provinces with the largest intra-province $R_0$ values are:
+```{r}
+intracityR0 %>%
+  arrange(desc(intraR0)) %>%
+  head(10)
+```
+
+Let's map the intracity $R_0$ values for the provinces:
+```{r}
+intracityR0sf <- prov_polygons %>%
+  right_join(intracityR0) %>%
+  select(province, intraR0, everything())
+```
+
+```{r}
+intracityR0sf %>%
+  st_geometry() %>%
+  plot(lwd = .1, col = pal[cut(intracityR0sf$intraR0, quantile(intracityR0sf$intraR0, seq(0, 1, le = 11)))], main = NA)
+
+vn0 %>% 
+  st_geometry() %>% 
+  plot(add = TRUE)
+```
+
+### Intercity $R_0$
+Intercity $R_0$ for location $i$ is defined as $\sum_{j \neq i} R_{0 ij}$. 
+
+Let's consider the intercity R0 values:
+```{r}
+intercityR0 <- prov_coloc %>%
+  filter(province_1 != province_2) %>%
+  dplyr::rename(interR0 = R0)
+```
+
+```{r}
+totalInter <- intercityR0 %>%
+  group_by(province_1) %>%
+  summarize(interR0 = sum(interR0)) %>%
+  arrange(desc(interR0)) %>%
+  rename(province = province_1)
+```
+
+Let's see the distribution of the intracity $R_0$ values; that is, the distribution of $R_{0 ii}$ values. 
+```{r}
+hist2(totalInter$interR0, n = 50, xlab = "Intercity R0", ylab = "number of districts", axes = FALSE)
+axis(1, seq(0, 30, 2))
+axis(2)
+```
+
+Let's map the intracity $R_0$ values for the provinces:
+The following pr have intercityR0 values greater than 1:
+```{r}
+intercityR0sf <- prov_polygons %>%
+  right_join(totalInter, "province") %>%
+  select(province, interR0, everything())
+```
+
+```{r}
+intercityR0sf %>%
+  st_geometry() %>%
+  plot(lwd = .1, col = pal[cut(intercityR0sf$interR0, quantile(intercityR0sf$interR0, seq(0, 1, le = 11)))], main = NA)
+
+vn0 %>% 
+  st_geometry() %>% 
+  plot(add = TRUE)
+```
+The districts with high intercity $R_0$ values are clustered in high density/highly connected regions including Hanoi and Ho Chi Minh, which is what we would expect. 
+
+Let's graph the relationship between population density and intercity $R_0$ values:
+```{r}
+ggplot(intercityR0sf, aes(x = log10(total_den_km2), y = interR0)) + geom_point()
+```
+As we would expect, population centers with higher population densities are better connected with surrounding regions resulting in higher intercity $R_0$ values. Hence, the intercity $R_0$ values under this model are consistent with epidemiological assumptions.
+
+### Intercity and Intracity $R_0$ values
+Let's graph the relationship between intracity $R_0$ values and intercity $R_0$ values:
+
+```{r}
+tmp <- intercityR0sf %>%
+  right_join(intracityR0)
+```
+
+```{r}
+ggplot(tmp, aes(x = intraR0, y = interR0)) + geom_point() +
+  geom_abline(slope = 1, intercept = 0)
+```
+
+```{r}
+prov_coloc
+```
+### Risk of Infection
+Let's calculate it for all districts:
+```{r}
+ROIdf <- prov_coloc %>% 
+  group_by(province_1) %>%
+  summarise(ROI = sum(R0)) %>%
+  dplyr::rename(province = province_1) %>%
+  arrange(desc(ROI)) %>%
+  mutate(ROI = ROI / head(., 1)$ROI)
+
+ROIsf <- prov_polygons %>%
+  right_join(ROIdf, "province")
+```
+
+It look like this:
+```{r}
+ROIsf %>%
+  arrange(desc(ROI)) %>%
+  select(province, total_den_km2, ROI) %>%
+  st_drop_geometry() %>%
+  head(30)
+```
+
+```{r}
+hist2(ROIsf$ROI, n = 50, xlab = "Intracity R0", ylab = "number of districts", axes = FALSE)
+axis(1, seq(0, 1, 0.1))
+axis(2)
+```
+
+Let's map the risk of infection to the provinces:
+```{r}
+ROIsf %>%
+  st_geometry() %>%
+  plot(lwd = .1, col = pal[cut(ROIsf$ROI, quantile(ROIsf$ROI, seq(0, 1, le = 11)))], main = NA)
 
 vn0 %>%
   st_geometry() %>%
