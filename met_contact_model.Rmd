@@ -781,6 +781,7 @@ fb_pop %>%
   with(plot(log10(n), log10(fb_population_1), col = color, axes = FALSE,
                ylim = c(1, 4.5), xlim = c(3.8, 6),
                xlab = "district population", ylab = "facebook population"))
+abline(model, col = "green")
 axis(1, 4:6, format(10000 * c(1, 10, 100), big.mark = ",", scientific = FALSE, trim = TRUE))
 axis(2, 1:4, format(10 * c(1, 10, 100, 1000), big.mark = ",", scientific = FALSE, trim = TRUE))
 ```
@@ -1060,39 +1061,39 @@ The grouping that we observed in the first and second model has largely disappea
 ### Risk of Infection
 Let's calculate it for all districts:
 ```{r}
-ROIdf <- R0 %>% 
+distROIdf <- R0 %>% 
   group_by(polygon1_id) %>%
   summarize(ROI = sum(R0)) %>%
   rename(polygon_id = polygon1_id) %>%
   arrange(desc(ROI)) %>%
   mutate(ROI = ROI / head(., 1)$ROI)
 
-ROIsf <- dist_polygons %>%
-  right_join(ROIdf, "polygon_id")
+distROIsf <- dist_polygons %>%
+  right_join(distROIdf, "polygon_id")
 ```
 
 It look like this:
 ```{r}
-ROIsf %>%
+distROIsf %>%
   arrange(desc(ROI)) %>%
   select(province, district, den_km2, ROI) %>%
   st_drop_geometry() %>%
   head(30)
 ```
 
-The districts with the highest risk of infection are located in Hanoi and Ho Chi Minh provinces. There are a few districts with very low population densities (Ha Giang Province in Northern Vietnam) that have relatively high risks of infection, which are presumably attributable to the fact that they are concentrated within a small region of the much large district and do not travel outside the population leading to very high $C_{ii}$ values in the colocation matrix. This is tested below. 
+The districts with the highest risk of infection are located in Hanoi and Ho Chi Minh provinces. There are no longer any districts with low population densities but relatively high risks of infection.
 
 ```{r}
-hist2(ROIsf$ROI, n = 50, xlab = "Intracity R0", ylab = "number of districts", axes = FALSE)
+hist2(distROIsf$ROI, n = 50, xlab = "Intracity R0", ylab = "number of districts", axes = FALSE)
 axis(1, seq(0, 1, 0.1))
 axis(2)
 ```
 
 Let's map the risk of infection to the districts:
 ```{r}
-ROIsf %>%
+distROIsf %>%
   st_geometry() %>%
-  plot(lwd = .1, col = pal[cut(ROIsf$ROI, quantile(ROIsf$ROI, seq(0, 1, le = 11)))], main = NA)
+  plot(lwd = .1, col = pal[cut(distROIsf$ROI, quantile(distROIsf$ROI, seq(0, 1, le = 11)))], main = NA)
 
 vn0 %>%
   st_geometry() %>%
@@ -1101,9 +1102,9 @@ vn0 %>%
 
 Let's examine the relationship between population density and risk of infection:
 ```{r}
-ggplot(ROIsf, aes(x = log10(den_km2), y = ROI)) + 
+ggplot(distROIsf, aes(x = log10(den_km2), y = ROI)) + 
   geom_point() +
-  geom_point(data = filter(ROIsf, province == "Hà Giang"), aes(x= log10(den_km2), y = ROI), color='red')
+  geom_point(data = filter(distROIsf, province == "Hà Giang"), aes(x= log10(den_km2), y = ROI), color='red')
 ```
 Generally, risk of infection increases with population density. Note that the districts in the Hà Giang province no longer have have particularly high ROI for their relatively low population densities as highlighted in red.
 
@@ -1120,7 +1121,7 @@ Let's compute the $R_{0 ij}$ values with the standard reference province of Hồ
 ```{r warning = FALSE}
 prov_coloc <- reshape2::melt(coloc_mat) %>%
   setNames(c("polygon1_id", "polygon2_id", "link_value")) %>%
-  dplyr::right_join(select(fb_pop, polygon1_id, province)) %>%
+  dplyr::right_join(select(fb_pop, polygon1_id, province), "polygon1_id") %>%
   rename(province_1 = province) %>%
   dplyr::right_join(select(fb_pop, polygon1_id, province, fb_population_1),  c("polygon2_id" = "polygon1_id")) %>%
   rename(province_2 = province, fb_population_2 = fb_population_1) %>%
@@ -1140,7 +1141,7 @@ ref_prov <- prov_coloc %>%
 prov_coloc %<>% mutate(R0 = 18 * sqrt(coloc_value) / sqrt(ref_prov))
 ```
 
-The following code summarizes the province-level population and geographical data. 
+The following code summarizes the province-level population and geographical data from GADM/census data set:
 ```{r warning = FALSE}
 prov_polygons <- dist_polygons %>%
   group_by(province) %>%
@@ -1177,7 +1178,7 @@ intracityR0 %>%
 Let's map the intracity $R_0$ values for the provinces:
 ```{r}
 intracityR0sf <- prov_polygons %>%
-  right_join(intracityR0) %>%
+  right_join(intracityR0, "province") %>%
   select(province, intraR0, everything())
 ```
 
@@ -1217,7 +1218,6 @@ axis(2)
 ```
 
 Let's map the intracity $R_0$ values for the provinces:
-The following pr have intercityR0 values greater than 1:
 ```{r}
 intercityR0sf <- prov_polygons %>%
   right_join(totalInter, "province") %>%
@@ -1246,7 +1246,7 @@ Let's graph the relationship between intracity $R_0$ values and intercity $R_0$ 
 
 ```{r}
 tmp <- intercityR0sf %>%
-  right_join(intracityR0)
+  right_join(intracityR0, "province")
 ```
 
 ```{r}
@@ -1254,9 +1254,44 @@ ggplot(tmp, aes(x = intraR0, y = interR0)) + geom_point() +
   geom_abline(slope = 1, intercept = 0)
 ```
 
+Note that a large fraction of the inter-province $R_0$ for the provinces is attributable to connections with Hồ Chí Minh and Hà Nội:
+
+Histogram of the percent inter-province ROI attributable to connections with Hồ Chí Minh and Hà Nội:
 ```{r}
-prov_coloc
+intercityR0 %>%
+  right_join(totalInter, c("province_1" = "province")) %>%
+  rename(totalInter = interR0.y, interR0 = interR0.x) %>%
+  mutate(tmp = interR0 / totalInter * 100) %>%
+  filter(province_2 %in% c("Hồ Chí Minh", "Hà Nội")) %>%
+  group_by(province_1) %>%
+  summarise(perTotal = sum(tmp)) %>%
+  arrange(desc(perTotal)) %>%
+  pull(perTotal) %>%
+  hist2(., n = 50, xlab = "Percent interROI from Hồ Chí Minh/Hà Nộ", ylab = "number of districts", axes = FALSE)
+axis(1, seq(0, 100, 10))
+axis(2)
 ```
+
+Relationship between inter-province $R_0$ and intra-province $R_0$ with Hồ Chí Minh and Hà Nội connections removed:
+```{r}
+intercityR0sf <- prov_coloc %>%
+  filter(province_1 != province_2) %>%
+  dplyr::rename(interR0 = R0) %>%
+  filter(province_2 %notin% c("Hồ Chí Minh", "Hà Nội")) %>%
+  group_by(province_1) %>%
+  summarize(interR0 = sum(interR0)) %>%
+  arrange(desc(interR0)) %>%
+  rename(province = province_1)
+
+tmp <- intercityR0sf %>%
+  right_join(intracityR0, "province")
+```
+
+```{r}
+ggplot(tmp, aes(x = intraR0, y = interR0)) + geom_point() +
+  geom_abline(slope = 1, intercept = 0)
+```
+
 ### Risk of Infection
 Let's calculate it for all districts:
 ```{r}
@@ -1296,3 +1331,34 @@ vn0 %>%
   st_geometry() %>%
   plot(add = TRUE)
 ```
+
+### Province-level ROI vs. aggregation of district-level ROI
+We want to compare the province-level risk of infection with an aggregation of the district-level risk of infection:
+
+First, aggregate the district-level ROI into provinces by taking mean ROI for each province:
+```{r}
+tmp <- distROIdf %>%
+  right_join(select(as.data.frame(dist_polygons), province, polygon_id), "polygon_id") %>%
+  group_by(province) %>%
+  summarise(totalROI = sum(ROI)) %>%
+  arrange(desc(totalROI)) %>%
+  mutate(adjROI = totalROI / head(., 1)$totalROI)
+```
+
+Let's collate the two sets of data:
+```{r}
+bothROI <- ROIsf %>%
+  right_join(select(tmp, province, adjROI), "province") %>%
+  select(province, total_pop, ROI, adjROI, everything()) %>%
+  arrange(desc(ROI))
+```
+
+Let's see how they compare:
+```{r}
+bothROI %>% 
+  ggplot(aes(x = ROI, y = adjROI)) + 
+  labs(x = "Province-level ROI", y = "District-adjusted Province ROI") + 
+  geom_point()
+```
+
+They appear generally consistent. It is worth noting, however, that the province-level ROI tend to be higher than the district-adjusted province-level ROI. That is, the risk of infection of the district as a whole is generally considered greater than the sum of the risk of infection of the individual districts that make up the province. 
